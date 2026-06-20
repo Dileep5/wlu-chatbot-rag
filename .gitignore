@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+
+# VS Code
+.vscode/
+
+# Mac
+.DS_Store
+
+# ChromaDB generated files
+data/vector_db/
+
+# Python virtual environments
+venv/
+.env
