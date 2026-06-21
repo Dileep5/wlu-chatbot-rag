@@ -17,50 +17,87 @@ course_links = []
 
 # Find all course links
 for link in soup.find_all("a"):
+
     href = link.get("href")
 
     if href and "course.php" in href:
+
         full_url = "https://academic-calendar.wlu.ca/" + href
-        course_links.append(full_url)
+
+        if full_url not in course_links:
+            course_links.append(full_url)
 
 print(f"Found {len(course_links)} course links")
 
 # Visit each course page
 for url in course_links:
 
-    page = requests.get(url)
-    course_soup = BeautifulSoup(page.text, "html.parser")
-
     try:
-        # Second h1 contains course info
-        header = course_soup.find_all("h1")[1].get_text(" ", strip=True)
 
-        # Extract course code
-        course_code = re.search(r"CP\d{3}", header).group()
+        page = requests.get(url)
 
-        # Extract credits
-        credits = re.search(r"(\d+\.\d+)\s*Credit", header).group(1)
+        if page.status_code != 200:
+            print(f"Failed: {url}")
+            continue
 
-        # Extract title
+        course_soup = BeautifulSoup(page.text, "html.parser")
+
+        # Second h1 contains clean course info
+        h1_tags = course_soup.find_all("h1")
+
+        if len(h1_tags) < 2:
+            print(f"No course header found: {url}")
+            continue
+
+        header = h1_tags[1].get_text(" ", strip=True)
+
+        # Example:
+        # CP640 Machine Learning 0.5 Credit
+
+        code_match = re.search(r"([A-Z]{2,4}\d{3}[A-Z]?)", header)
+        credit_match = re.search(r"(\d+\.\d+)\s*Credit", header)
+
+        if not code_match:
+            print(f"Could not extract course code: {url}")
+            continue
+
+        course_code = code_match.group(1)
+
+        credits = ""
+        if credit_match:
+            credits = credit_match.group(1)
+
+        # Remove code and credits from header
         title = header
-        title = re.sub(r"CP\d{3}", "", title)
-        title = re.sub(r"\d+\.\d+\s*Credit", "", title)
+
+        title = re.sub(
+            r"^[A-Z]{2,4}\d{3}[A-Z]?\s*",
+            "",
+            title
+        )
+
+        title = re.sub(
+            r"\s*\d+\.\d+\s*Credits?$",
+            "",
+            title
+        )
+
         title = title.strip()
 
-        # Extract description
-        h1 = course_soup.find_all("h1")[1]
+        # Description = first paragraph after h1
+        description = ""
 
-        p_tag = h1.find_next("p")
+        p_tag = h1_tags[1].find_next("p")
 
         if p_tag:
-            description = p_tag.get_text(" ", strip=True)
-        else:
-            description = ""
+            description = p_tag.get_text(
+                " ",
+                strip=True
+            )
 
-        # Insert into database
         cursor.execute("""
         INSERT INTO courses
-        (course_code, title, credits, description, url)
+        (course_code, course_name, credits, description, source_url)
         VALUES (?, ?, ?, ?, ?)
         """, (
             course_code,
@@ -68,11 +105,12 @@ for url in course_links:
             credits,
             description,
             url
-        ))
+    ))
 
         print(f"Inserted: {course_code} - {title}")
 
     except Exception as e:
+
         print(f"Error processing {url}")
         print(e)
 
