@@ -1,36 +1,40 @@
 import requests
 import sqlite3
 import re
+import csv
 from bs4 import BeautifulSoup
 
 # Connect to database
 conn = sqlite3.connect("data/courses.db")
 cursor = conn.cursor()
 
-# Physics & Computer Science page
-department_url = "https://academic-calendar.wlu.ca/department.php?cal=3&d=3327&s=1186&y=94"
-
-response = requests.get(department_url)
-soup = BeautifulSoup(response.text, "html.parser")
-
+# Read all course links from CSV
 course_links = []
 
-# Find all course links
-for link in soup.find_all("a"):
+with open(
+    "outputs/course_links.csv",
+    newline="",
+    encoding="utf-8"
+) as file:
 
-    href = link.get("href")
+    reader = csv.DictReader(file)
 
-    if href and "course.php" in href:
+    for row in reader:
 
-        full_url = "https://academic-calendar.wlu.ca/" + href
-
-        if full_url not in course_links:
-            course_links.append(full_url)
+        course_links.append({
+            "faculty_name": row["faculty_name"],
+            "department_name": row["department_name"],
+            "course_url": row["course_url"]
+        })
 
 print(f"Found {len(course_links)} course links")
 
 # Visit each course page
-for url in course_links:
+for course in course_links:
+
+    faculty_name = course["faculty_name"]
+    department_name = course["department_name"]
+    url = course["course_url"]
 
     try:
 
@@ -42,7 +46,7 @@ for url in course_links:
 
         course_soup = BeautifulSoup(page.text, "html.parser")
 
-        # Second h1 contains clean course info
+        # Second h1 contains course information
         h1_tags = course_soup.find_all("h1")
 
         if len(h1_tags) < 2:
@@ -51,11 +55,20 @@ for url in course_links:
 
         header = h1_tags[1].get_text(" ", strip=True)
 
-        # Example:
+        # Examples:
         # CP640 Machine Learning 0.5 Credit
+        # HI600A The Nature and Practice of History 0.5 Credit
 
-        code_match = re.search(r"([A-Z]{2,4}\d{3}[A-Z]?)", header)
-        credit_match = re.search(r"(\d+\.\d+)\s*Credit", header)
+        code_match = re.search(
+            r"([A-Z]{2,4}\d{3}[A-Z]?)",
+            header
+        )
+
+        credit_match = re.search(
+            r"(\d+\.\d+)\s*Credits?",
+            header,
+            re.IGNORECASE
+        )
 
         if not code_match:
             print(f"Could not extract course code: {url}")
@@ -64,22 +77,23 @@ for url in course_links:
         course_code = code_match.group(1)
 
         credits = ""
+
         if credit_match:
             credits = credit_match.group(1)
 
-        # Remove code and credits from header
-        title = header
-
+        # Remove course code
         title = re.sub(
             r"^[A-Z]{2,4}\d{3}[A-Z]?\s*",
             "",
-            title
+            header
         )
 
+        # Remove credits
         title = re.sub(
             r"\s*\d+\.\d+\s*Credits?$",
             "",
-            title
+            title,
+            flags=re.IGNORECASE
         )
 
         title = title.strip()
@@ -97,21 +111,33 @@ for url in course_links:
 
         cursor.execute("""
         INSERT INTO courses
-        (course_code, course_name, credits, description, source_url)
-        VALUES (?, ?, ?, ?, ?)
+        (
+            course_code,
+            course_name,
+            credits,
+            description,
+            source_url,
+            faculty_name,
+            department_name
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             course_code,
             title,
             credits,
             description,
-            url
-    ))
+            url,
+            faculty_name,
+            department_name
+        ))
 
-        print(f"Inserted: {course_code} - {title}")
+        print(
+            f"Inserted: {course_code} | {department_name}"
+        )
 
     except Exception as e:
 
-        print(f"Error processing {url}")
+        print(f"Error processing: {url}")
         print(e)
 
 conn.commit()
