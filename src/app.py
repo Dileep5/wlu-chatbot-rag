@@ -1,18 +1,15 @@
 import os
 import re
 
-import chromadb
 import streamlit as st
-from sentence_transformers import SentenceTransformer
 from openai import OpenAI
+
+from retriever import hybrid_search
+from conversation import is_conversation
 
 # -----------------------------
 # Configuration
 # -----------------------------
-DB_DIR = "data/vector_db"
-COLLECTION_NAME = "wlu_chatbot_chunks"
-MODEL_NAME = "all-MiniLM-L6-v2"
-DISTANCE_CUTOFF = 1.8
 
 GREETING_PATTERNS = [
     r"^hi$",
@@ -31,141 +28,343 @@ GREETING_PATTERNS = [
 
 
 # -----------------------------
-# Helper functions
+# Helper Functions
 # -----------------------------
+
 def is_greeting(text: str) -> bool:
+
     text = text.lower().strip()
+
     for pattern in GREETING_PATTERNS:
+
         if re.fullmatch(pattern, text):
             return True
+
     return False
 
 
-@st.cache_resource
-def load_resources():
-    """Load model and ChromaDB only once."""
-    model = SentenceTransformer(MODEL_NAME)
-    client = chromadb.PersistentClient(path=DB_DIR)
-    collection = client.get_collection(COLLECTION_NAME)
-    return model, collection
+def generate_answer(
+    query,
+    context
+):
 
-
-def retrieve_top_chunk(query: str, model, collection):
-    """Return the most relevant chunk and its metadata."""
-    query_embedding = model.encode(query).tolist()
-
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=1,
-        include=["documents", "metadatas", "distances"]
+    api_key = os.getenv(
+        "OPENAI_API_KEY"
     )
 
-    document = results["documents"][0][0]
-    metadata = results["metadatas"][0][0]
-    distance = results["distances"][0][0]
-
-    return document, metadata, distance
-
-
-def generate_answer(query: str, context: str):
-    """
-    If OpenAI key exists, use GPT.
-    Otherwise return a simple context-based fallback.
-    """
-    api_key = os.getenv("OPENAI_API_KEY")
-
     if not api_key:
-        return f"Based on the retrieved WLU content:\n\n{context[:700]}..."
+
+        return (
+            "OpenAI API key not found."
+        )
 
     client = OpenAI()
 
-    prompt = f"""
-You are a WLU university assistant.
+    messages = [
 
-Answer ONLY from the provided context.
+        {
+            "role": "system",
+            "content": """
+You are the official AI assistant
+for Wilfrid Laurier University.
 
-If the answer is not present in the context, say:
-"I could not find that information in the available WLU source."
+You should behave naturally,
+similar to ChatGPT or Claude.
 
-Context:
+Responsibilities:
+
+1. Have natural conversations.
+2. Help users with WLU.
+3. Answer follow-up questions.
+4. Remember previous messages.
+5. Use retrieved WLU information
+   whenever available.
+
+Rules:
+
+- Be friendly.
+- Be conversational.
+- Format answers clearly.
+- Never invent university facts.
+- If information is unavailable,
+  clearly say so.
+"""
+        }
+
+    ]
+
+    messages.extend(
+        st.session_state.chat_history[-10:]
+    )
+
+    messages.append(
+        {
+            "role": "user",
+            "content": f"""
+Retrieved WLU Information:
+
 {context}
 
 Question:
-{query}
-"""
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {
-                "role": "system",
-                "content": "Answer only from provided WLU context."
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        temperature=0.2
+{query}
+
+Answer naturally like ChatGPT.
+"""
+        }
     )
 
-    return response.choices[0].message.content.strip()
+    response = (
+        client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=700
+        )
+    )
+
+    answer = (
+        response
+        .choices[0]
+        .message
+        .content
+        .strip()
+    )
+
+    return answer
+
+
+def generate_chat_response(query):
+
+    client = OpenAI()
+
+    response = client.chat.completions.create(
+
+        model="gpt-4o-mini",
+
+        messages=[
+
+            {
+                "role": "system",
+                "content":
+                """
+You are a friendly AI assistant
+for Wilfrid Laurier University.
+
+Behave naturally like ChatGPT
+or Claude.
+
+You may have natural
+conversations with users.
+
+Examples:
+
+- how are you
+- who are you
+- what can you do
+- do you know me
+- tell me a joke
+- what did i ask before
+
+Be friendly and conversational.
+                """
+            }
+
+        ]
+
+        +
+
+        st.session_state.chat_history[-10:]
+
+        +
+
+        [
+            {
+                "role": "user",
+                "content": query
+            }
+        ],
+
+        temperature=0.8,
+        max_tokens=300
+    )
+
+    return (
+        response
+        .choices[0]
+        .message
+        .content
+        .strip()
+    )
 
 
 # -----------------------------
 # Streamlit UI
 # -----------------------------
-st.set_page_config(page_title="WLU Chatbot", page_icon="🎓", layout="centered")
 
-st.title("Deepu's Sandra WLU Chatbot")
-st.caption("A simple RAG-based university information assistant")
+st.set_page_config(
+    page_title="WLU Chatbot",
+    page_icon="🎓",
+    layout="centered"
+)
 
-model, collection = load_resources()
+st.title(
+    "Deepu's Sandra WLU Chatbot"
+)
+
+st.caption(
+    "Hybrid RAG Assistant for "
+    "Wilfrid Laurier University"
+)
+
+
+# -----------------------------
+# Session State
+# -----------------------------
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Show chat history
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-query = st.chat_input("Ask something about WLU...")
+
+# -----------------------------
+# Display Previous Messages
+# -----------------------------
+
+for msg in st.session_state.messages:
+
+    with st.chat_message(
+        msg["role"]
+    ):
+
+        st.markdown(
+            msg["content"]
+        )
+
+        if "source" in msg and msg["source"]:
+            st.markdown(
+                f"**Source:** {msg['source']}"
+            )
+
+
+# -----------------------------
+# User Input
+# -----------------------------
+
+query = st.chat_input(
+    "Ask something about WLU..."
+)
+
 
 if query:
-    # Save user message
-    st.session_state.messages.append({"role": "user", "content": query})
 
-    with st.chat_message("user"):
-        st.markdown(query)
+    st.session_state.messages.append(
+        {
+            "role": "user",
+            "content": query
+        }
+    )
 
-    # Handle greetings
-    if is_greeting(query):
-        answer = "Hello! Ask me anything about WLU."
-        st.session_state.messages.append({"role": "assistant", "content": answer})
+    st.session_state.chat_history.append(
+        {
+            "role": "user",
+            "content": query
+        }
+    )
 
-        with st.chat_message("assistant"):
-            st.markdown(answer)
+    with st.chat_message(
+        "user"
+    ):
+        st.markdown(
+            query
+        )
 
-    else:
-        try:
-            document, metadata, distance = retrieve_top_chunk(query, model, collection)
+    try:
 
-            with st.chat_message("assistant"):
-                st.write(f"[DEBUG] Retrieval distance: {distance:.4f}")
+        # greetings
+        if is_greeting(query):
 
-                if distance > DISTANCE_CUTOFF:
-                    answer = "I could not find that information in the available WLU source."
-                    st.markdown(answer)
-                else:
-                    answer = generate_answer(query, document)
-                    st.markdown(answer)
-                    st.markdown(f"**Source:** {metadata.get('url', 'No source found')}")
+            answer = (
+                "Hello! 👋\n\n"
+                "How can I help you "
+                "with Wilfrid Laurier "
+                "University today?"
+            )
 
-            st.session_state.messages.append({"role": "assistant", "content": answer})
+            source = None
 
-        except Exception as e:
-            error_msg = f"Bot error: {e}"
-            st.session_state.messages.append({"role": "assistant", "content": error_msg})
-            with st.chat_message("assistant"):
-                st.error(error_msg)
+        # normal conversation
+        elif is_conversation(query):
+
+            answer = generate_chat_response(
+                query
+            )
+
+            source = None
+
+        # WLU retrieval
+        else:
+
+            context, source = (
+                hybrid_search(
+                    query
+                )
+            )
+
+            answer = (
+                generate_answer(
+                    query,
+                    context
+                )
+            )
+
+        with st.chat_message(
+            "assistant"
+        ):
+
+            st.markdown(
+                answer
+            )
+
+            if source:
+                st.markdown(
+                    f"**Source:** "
+                    f"{source}"
+                )
+
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": answer,
+                "source": source
+            }
+        )
+
+        st.session_state.chat_history.append(
+            {
+                "role": "assistant",
+                "content": answer
+            }
+        )
+
+    except Exception as e:
+
+        error_msg = (
+            f"Bot Error: {e}"
+        )
+
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": error_msg
+            }
+        )
+
+        with st.chat_message(
+            "assistant"
+        ):
+            st.error(
+                error_msg
+            )
