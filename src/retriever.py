@@ -16,6 +16,16 @@ collection = client.get_collection(
     "wlu_chatbot_chunks"
 )
 
+FOLLOWUP_PHRASES = [
+    "tell me more",
+    "more",
+    "explain",
+    "details",
+    "more details",
+    "what about this",
+    "what about it"
+]
+
 
 def search_course(question, memory=None):
 
@@ -144,15 +154,7 @@ def hybrid_search(question, memory=None):
 
     question_lower = question.lower()
 
-    if memory is not None and question_lower in [
-        "tell me more",
-        "more",
-        "explain",
-        "details",
-        "more details",
-        "what about this",
-        "what about it"
-    ]:
+    if memory is not None and question_lower in FOLLOWUP_PHRASES:
 
         if memory.get("last_course"):
             question = memory["last_course"]

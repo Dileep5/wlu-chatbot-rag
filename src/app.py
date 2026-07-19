@@ -4,8 +4,9 @@ import re
 import streamlit as st
 from openai import OpenAI
 
-from retriever import hybrid_search
+from retriever import hybrid_search, FOLLOWUP_PHRASES
 from conversation import is_conversation
+from domain_guard import is_wlu_related
 
 # -----------------------------
 # Configuration
@@ -25,6 +26,15 @@ GREETING_PATTERNS = [
     r"^good afternoon$",
     r"^good evening$",
 ]
+
+OFF_TOPIC_MESSAGE = (
+    "I'm designed only to help with questions about "
+    "Wilfrid Laurier University - things like programs, "
+    "courses, admissions, tuition, faculty, campus, "
+    "scholarships, student services, and departments. "
+    "I'm not able to help with that topic, but feel free "
+    "to ask me anything about WLU!"
+)
 
 
 # -----------------------------
@@ -88,6 +98,10 @@ Rules:
 - Never invent university facts.
 - If information is unavailable,
   clearly say so.
+- Only answer questions related to
+  Wilfrid Laurier University. If asked
+  about something unrelated, politely
+  say you can only help with WLU topics.
 """
         }
 
@@ -309,6 +323,15 @@ if query:
                 query
             )
 
+            source = None
+
+        # out-of-domain (memory follow-ups always bypass this check)
+        elif (
+            query.lower().strip() not in FOLLOWUP_PHRASES
+            and not is_wlu_related(query)
+        ):
+
+            answer = OFF_TOPIC_MESSAGE
             source = None
 
         # WLU retrieval
