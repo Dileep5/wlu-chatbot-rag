@@ -228,6 +228,13 @@ if "messages" not in st.session_state:
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
+if "memory" not in st.session_state:
+    st.session_state.memory = {
+        "last_course": None,
+        "last_program": None,
+        "last_department": None,
+    }
+
 
 # -----------------------------
 # Display Previous Messages
@@ -309,7 +316,8 @@ if query:
 
             context, source = (
                 hybrid_search(
-                    query
+                    query,
+                    st.session_state.memory
                 )
             )
 

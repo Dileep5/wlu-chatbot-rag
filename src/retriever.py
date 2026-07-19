@@ -1,7 +1,6 @@
 import sqlite3
 import re
 import chromadb
-from memory import memory
 from sentence_transformers import SentenceTransformer
 
 DB_DIR = "data/vector_db"
@@ -18,7 +17,7 @@ collection = client.get_collection(
 )
 
 
-def search_course(question):
+def search_course(question, memory=None):
 
     course_match = re.search(
         r"\b[A-Z]{2,4}\d{3}[A-Z]?\b",
@@ -51,13 +50,13 @@ def search_course(question):
 
     conn.close()
 
-    if result:
+    if result and memory is not None:
         memory["last_course"] = course_code
 
     return result
 
 
-def search_program(question):
+def search_program(question, memory=None):
 
     conn = sqlite3.connect(
         "data/programs.db"
@@ -83,14 +82,15 @@ def search_program(question):
 
         if row[0].lower() in question:
 
-            memory["last_program"] = row[0]
+            if memory is not None:
+                memory["last_program"] = row[0]
 
             return row
 
     return None
 
 
-def search_department(question):
+def search_department(question, memory=None):
 
     conn = sqlite3.connect(
         "data/departments.db"
@@ -116,7 +116,8 @@ def search_department(question):
 
         if row[0].lower() in question:
 
-            memory["last_department"] = row[0]
+            if memory is not None:
+                memory["last_department"] = row[0]
 
             return row
 
@@ -137,13 +138,13 @@ def search_vector(question):
     return results
 
 
-def hybrid_search(question):
+def hybrid_search(question, memory=None):
 
     # FOLLOWUP MEMORY
 
     question_lower = question.lower()
 
-    if question_lower in [
+    if memory is not None and question_lower in [
         "tell me more",
         "more",
         "explain",
@@ -153,18 +154,18 @@ def hybrid_search(question):
         "what about it"
     ]:
 
-        if memory["last_course"]:
+        if memory.get("last_course"):
             question = memory["last_course"]
 
-        elif memory["last_program"]:
+        elif memory.get("last_program"):
             question = memory["last_program"]
 
-        elif memory["last_department"]:
+        elif memory.get("last_department"):
             question = memory["last_department"]
 
     # COURSE
 
-    result = search_course(question)
+    result = search_course(question, memory)
 
     if result:
 
@@ -182,7 +183,7 @@ Description:
 
     # PROGRAM
 
-    result = search_program(question)
+    result = search_program(question, memory)
 
     if result:
 
@@ -200,7 +201,7 @@ Program Requirements:
 
     # DEPARTMENT
 
-    result = search_department(question)
+    result = search_department(question, memory)
 
     if result:
 
