@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import re
 import chromadb
@@ -26,6 +27,17 @@ FOLLOWUP_PHRASES = [
     "what about it"
 ]
 
+# Trailing punctuation a user might naturally type after a follow-up
+# phrase ("Tell me more.", "More?", "Explain!") - stripped before checking
+# membership in FOLLOWUP_PHRASES so punctuation doesn't defeat an exact
+# match. Used everywhere that membership check happens.
+_FOLLOWUP_TRAILING_PUNCTUATION = ".,!?;: "
+
+
+def normalize_followup_text(text):
+
+    return text.lower().strip().rstrip(_FOLLOWUP_TRAILING_PUNCTUATION)
+
 
 def _table_has_level_column(db_path, table_name):
 
@@ -44,6 +56,29 @@ def _table_has_level_column(db_path, table_name):
 COURSES_HAVE_LEVEL = _table_has_level_column("data/courses.db", "courses")
 PROGRAMS_HAVE_LEVEL = _table_has_level_column("data/programs.db", "programs")
 DEPARTMENTS_HAVE_LEVEL = _table_has_level_column("data/departments.db", "departments")
+
+
+def _table_exists(db_path, table_name):
+
+    if not os.path.exists(db_path):
+        return False
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,)
+    )
+    exists = cursor.fetchone() is not None
+    conn.close()
+
+    return exists
+
+
+# faculty.db doesn't exist at all until the faculty scrape has been run.
+# Detect this so search_faculty can no-op gracefully rather than raising
+# "no such table" and breaking every query that reaches structured_search.
+FACULTY_DB_READY = _table_exists("data/faculty.db", "faculty")
 
 
 def search_course(question, memory=None):
@@ -257,6 +292,147 @@ def search_department(question, memory=None):
     return None
 
 
+# Common title words - stripped for name matching, and required (alongside
+# a capitalized surname) for the surname-only fallback tier below.
+_PERSON_TITLE_WORDS = ["dr.", "dr", "professor", "prof.", "prof"]
+
+
+def _strip_person_titles(text):
+
+    text = text.lower()
+
+    # Matched separately from _PERSON_TITLE_WORDS: a trailing "\b" after an
+    # escaped period never matches (a period followed by a space has no
+    # word boundary on either side), which left a stray "." behind and
+    # broke the substring match this function exists to enable. The "X."
+    # alternative has no trailing boundary requirement - the literal
+    # period is itself an unambiguous delimiter.
+    text = re.sub(r"\bdr\.|\bdr\b", " ", text)
+    text = re.sub(r"\bprof\.|\bprof\b", " ", text)
+    text = re.sub(r"\bprofessor\b", " ", text)
+
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _strip_credentials(name):
+
+    # Stored names sometimes carry a trailing academic/professional
+    # credential after a comma (e.g. "Matthew Smith, PhD", "Jane Doe, MD",
+    # "John Smith, P.Eng.") - stripping at the first comma is generic to
+    # any credential without needing to enumerate them, and leaves names
+    # with no comma (the common case) untouched.
+    return name.split(",")[0].strip()
+
+
+def search_faculty(question, memory=None):
+
+    if not FACULTY_DB_READY:
+        return None
+
+    conn = sqlite3.connect(
+        "data/faculty.db"
+    )
+
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    SELECT
+        name,
+        title,
+        faculty_name,
+        department_name,
+        email,
+        phone,
+        office,
+        research_interests,
+        biography,
+        source_url
+    FROM faculty
+    """)
+
+    rows = cursor.fetchall()
+
+    conn.close()
+
+    question_lower = question.lower()
+
+    # Tier 1: title-stripped full-name substring match (highest priority).
+    normalized_question = _strip_person_titles(question_lower)
+
+    for row in rows:
+
+        normalized_name = _strip_person_titles(_strip_credentials(row[0]).lower())
+
+        if len(normalized_name) >= 4 and normalized_name in normalized_question:
+
+            if memory is not None:
+                memory["last_faculty"] = row[0]
+
+            return row
+
+    # Tier 2: fallback - first name AND last name both present, capitalized,
+    # as whole words in the original question (e.g. "Tell me about Louise
+    # Dawe" - no title, and the stored "Dr. Louise N. Dawe" won't substring
+    # -match because of the middle initial). No title word required here,
+    # but requiring two independent capitalized-word matches (rather than
+    # one) keeps false-positive risk low without needing a title as a
+    # safety net.
+    for row in rows:
+
+        name_parts = _strip_person_titles(_strip_credentials(row[0]).lower()).split()
+
+        if len(name_parts) < 2:
+            continue
+
+        first_name, last_name = name_parts[0], name_parts[-1]
+
+        if len(first_name) < 3 or len(last_name) < 3:
+            continue
+
+        first_pattern = rf"\b{re.escape(first_name.capitalize())}\b"
+        last_pattern = rf"\b{re.escape(last_name.capitalize())}\b"
+
+        if re.search(first_pattern, question) and re.search(last_pattern, question):
+
+            if memory is not None:
+                memory["last_faculty"] = row[0]
+
+            return row
+
+    # Tier 3: fallback - surname only (e.g. "Who is Professor Ghose?").
+    # Requires BOTH a title word present in the question AND the surname
+    # appearing capitalized as a whole word in the ORIGINAL (non-lowercased)
+    # question. Plain case-insensitive surname matching would collide with
+    # ordinary English words that are also real surnames here (e.g. "Gates",
+    # "Long") - the same lesson learned from acronym matching for programs.
+    has_title_word = any(
+        re.search(rf"\b{re.escape(word)}\b", question_lower)
+        for word in _PERSON_TITLE_WORDS
+    )
+
+    if has_title_word:
+
+        for row in rows:
+
+            name_parts = _strip_credentials(row[0]).strip().split()
+
+            if not name_parts:
+                continue
+
+            surname = name_parts[-1]
+
+            if len(surname) >= 3 and re.search(
+                rf"\b{re.escape(surname)}\b", question
+            ):
+
+                if memory is not None:
+                    memory["last_faculty"] = row[0]
+
+                return row
+
+    return None
+
+
 def search_vector(question):
 
     embedding = model.encode(
@@ -286,7 +462,7 @@ def structured_search(question, memory=None):
 
     question_lower = question.lower()
 
-    if memory is not None and question_lower in FOLLOWUP_PHRASES:
+    if memory is not None and normalize_followup_text(question) in FOLLOWUP_PHRASES:
 
         if memory.get("last_course"):
             question = memory["last_course"]
@@ -296,6 +472,9 @@ def structured_search(question, memory=None):
 
         elif memory.get("last_department"):
             question = memory["last_department"]
+
+        elif memory.get("last_faculty"):
+            question = memory["last_faculty"]
 
     # COURSE
 
@@ -350,6 +529,32 @@ Description:
 """
 
         return context, result[3]
+
+    # FACULTY
+
+    result = search_faculty(question, memory)
+
+    if result:
+
+        context = f"""
+Name: {result[0]}
+Title: {result[1]}
+Faculty: {result[2]}
+Department: {result[3]}
+
+Contact:
+Email: {result[4]}
+Phone: {result[5]}
+Office: {result[6]}
+
+Biography:
+{result[8]}
+
+Research Interests:
+{result[7]}
+"""
+
+        return context, result[9]
 
     return None
 

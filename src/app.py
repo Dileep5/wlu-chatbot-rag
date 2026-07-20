@@ -4,7 +4,12 @@ import re
 import streamlit as st
 from openai import OpenAI
 
-from retriever import hybrid_search, structured_search, FOLLOWUP_PHRASES
+from retriever import (
+    hybrid_search,
+    structured_search,
+    FOLLOWUP_PHRASES,
+    normalize_followup_text,
+)
 from conversation import is_conversation
 from domain_guard import is_wlu_related
 
@@ -247,6 +252,7 @@ if "memory" not in st.session_state:
         "last_course": None,
         "last_program": None,
         "last_department": None,
+        "last_faculty": None,
     }
 
 
@@ -348,7 +354,7 @@ if query:
 
         # out-of-domain (memory follow-ups always bypass this check)
         elif (
-            query.lower().strip() not in FOLLOWUP_PHRASES
+            normalize_followup_text(query) not in FOLLOWUP_PHRASES
             and not is_wlu_related(query)
         ):
 
