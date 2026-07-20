@@ -12,7 +12,8 @@ CREATE TABLE programs (
     description TEXT,
     admission_requirements TEXT,
     program_requirements TEXT,
-    source_url TEXT
+    source_url TEXT,
+    level TEXT
 )
 """)
 

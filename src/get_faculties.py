@@ -2,53 +2,61 @@ import requests
 import csv
 from bs4 import BeautifulSoup
 
-url = "https://academic-calendar.wlu.ca/index_old.php?cal=3&y=94"
-
-response = requests.get(url)
-soup = BeautifulSoup(response.text, "html.parser")
-
-faculties = []
-
-faculty_keywords = [
+FACULTY_KEYWORDS = [
     "Faculty",
     "School",
     "College",
     "Lazaridis"
 ]
 
-seen = set()
 
-for link in soup.find_all("a"):
+def scrape_faculties(cal, year, output_path):
 
-    href = link.get("href")
-    text = link.get_text(strip=True)
+    url = f"https://academic-calendar.wlu.ca/index_old.php?cal={cal}&y={year}"
 
-    if not href:
-        continue
+    response = requests.get(url)
+    soup = BeautifulSoup(response.text, "html.parser")
 
-    if "section.php" not in href:
-        continue
+    faculties = []
+    seen = set()
 
-    if not any(word in text for word in faculty_keywords):
-        continue
+    for link in soup.find_all("a"):
 
-    if text in seen:
-        continue
+        href = link.get("href")
+        text = link.get_text(strip=True)
 
-    seen.add(text)
+        if not href:
+            continue
 
-    full_url = "https://academic-calendar.wlu.ca/" + href
+        if "section.php" not in href:
+            continue
 
-    faculties.append([text, full_url])
+        if not any(word in text for word in FACULTY_KEYWORDS):
+            continue
 
-    print(text)
+        if text in seen:
+            continue
 
-with open("outputs/faculties.csv", "w", newline="", encoding="utf-8") as f:
+        seen.add(text)
 
-    writer = csv.writer(f)
+        full_url = "https://academic-calendar.wlu.ca/" + href
 
-    writer.writerow(["faculty_name", "url"])
+        faculties.append([text, full_url])
 
-    writer.writerows(faculties)
+        print(text)
 
-print(f"\nSaved {len(faculties)} faculty links")
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+
+        writer = csv.writer(f)
+
+        writer.writerow(["faculty_name", "url"])
+
+        writer.writerows(faculties)
+
+    print(f"\nSaved {len(faculties)} faculty links")
+
+    return faculties
+
+
+if __name__ == "__main__":
+    scrape_faculties(cal=3, year=94, output_path="outputs/faculties.csv")

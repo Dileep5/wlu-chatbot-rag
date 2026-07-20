@@ -4,7 +4,7 @@ import re
 import streamlit as st
 from openai import OpenAI
 
-from retriever import hybrid_search, FOLLOWUP_PHRASES
+from retriever import hybrid_search, structured_search, FOLLOWUP_PHRASES
 from conversation import is_conversation
 from domain_guard import is_wlu_related
 
@@ -324,6 +324,27 @@ if query:
             )
 
             source = None
+
+        # grounded structured match (course/program/department) - a real
+        # match is proof the query is in-domain, so it bypasses the
+        # out-of-domain gate entirely. This matters for short queries like
+        # "What is BBA?" that the keyword/LLM domain check can't reliably
+        # recognize on their own, but that retrieval can resolve directly.
+        elif (
+            structured := structured_search(
+                query,
+                st.session_state.memory
+            )
+        ):
+
+            context, source = structured
+
+            answer = (
+                generate_answer(
+                    query,
+                    context
+                )
+            )
 
         # out-of-domain (memory follow-ups always bypass this check)
         elif (

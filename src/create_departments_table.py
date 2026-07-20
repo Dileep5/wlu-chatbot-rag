@@ -15,7 +15,8 @@ CREATE TABLE departments (
     coordinator TEXT,
     programs TEXT,
     description TEXT,
-    source_url TEXT
+    source_url TEXT,
+    level TEXT
 )
 """)
 

@@ -4,143 +4,158 @@ import re
 import csv
 from bs4 import BeautifulSoup
 
-# Connect to database
-conn = sqlite3.connect("data/courses.db")
-cursor = conn.cursor()
 
-# Read all course links from CSV
-course_links = []
+def load_courses(course_links_csv, level):
 
-with open(
-    "outputs/course_links.csv",
-    newline="",
-    encoding="utf-8"
-) as file:
+    conn = sqlite3.connect("data/courses.db")
+    cursor = conn.cursor()
 
-    reader = csv.DictReader(file)
+    # Clear only this level's old data, so loading one level never
+    # wipes rows belonging to the other level (also prevents duplicate
+    # rows if this is re-run for the same level).
+    cursor.execute("DELETE FROM courses WHERE level = ?", (level,))
 
-    for row in reader:
+    course_links = []
 
-        course_links.append({
-            "faculty_name": row["faculty_name"],
-            "department_name": row["department_name"],
-            "course_url": row["course_url"]
-        })
+    with open(
+        course_links_csv,
+        newline="",
+        encoding="utf-8"
+    ) as file:
 
-print(f"Found {len(course_links)} course links")
+        reader = csv.DictReader(file)
 
-# Visit each course page
-for course in course_links:
+        for row in reader:
 
-    faculty_name = course["faculty_name"]
-    department_name = course["department_name"]
-    url = course["course_url"]
+            course_links.append({
+                "faculty_name": row["faculty_name"],
+                "department_name": row["department_name"],
+                "course_url": row["course_url"]
+            })
 
-    try:
+    print(f"Found {len(course_links)} course links")
 
-        page = requests.get(url)
+    # Visit each course page
+    for course in course_links:
 
-        if page.status_code != 200:
-            print(f"Failed: {url}")
-            continue
+        faculty_name = course["faculty_name"]
+        department_name = course["department_name"]
+        url = course["course_url"]
 
-        course_soup = BeautifulSoup(page.text, "html.parser")
+        try:
 
-        # Second h1 contains course information
-        h1_tags = course_soup.find_all("h1")
+            page = requests.get(url)
 
-        if len(h1_tags) < 2:
-            print(f"No course header found: {url}")
-            continue
+            if page.status_code != 200:
+                print(f"Failed: {url}")
+                continue
 
-        header = h1_tags[1].get_text(" ", strip=True)
+            course_soup = BeautifulSoup(page.text, "html.parser")
 
-        # Examples:
-        # CP640 Machine Learning 0.5 Credit
-        # HI600A The Nature and Practice of History 0.5 Credit
+            # Second h1 contains course information
+            h1_tags = course_soup.find_all("h1")
 
-        code_match = re.search(
-            r"([A-Z]{2,4}\d{3}[A-Z]?)",
-            header
-        )
+            if len(h1_tags) < 2:
+                print(f"No course header found: {url}")
+                continue
 
-        credit_match = re.search(
-            r"(\d+\.\d+)\s*Credits?",
-            header,
-            re.IGNORECASE
-        )
+            header = h1_tags[1].get_text(" ", strip=True)
 
-        if not code_match:
-            print(f"Could not extract course code: {url}")
-            continue
+            # Examples:
+            # CP640 Machine Learning 0.5 Credit
+            # HI600A The Nature and Practice of History 0.5 Credit
 
-        course_code = code_match.group(1)
-
-        credits = ""
-
-        if credit_match:
-            credits = credit_match.group(1)
-
-        # Remove course code
-        title = re.sub(
-            r"^[A-Z]{2,4}\d{3}[A-Z]?\s*",
-            "",
-            header
-        )
-
-        # Remove credits
-        title = re.sub(
-            r"\s*\d+\.\d+\s*Credits?$",
-            "",
-            title,
-            flags=re.IGNORECASE
-        )
-
-        title = title.strip()
-
-        # Description = first paragraph after h1
-        description = ""
-
-        p_tag = h1_tags[1].find_next("p")
-
-        if p_tag:
-            description = p_tag.get_text(
-                " ",
-                strip=True
+            code_match = re.search(
+                r"([A-Z]{2,4}\d{3}[A-Z]?)",
+                header
             )
 
-        cursor.execute("""
-        INSERT INTO courses
-        (
-            course_code,
-            course_name,
-            credits,
-            description,
-            source_url,
-            faculty_name,
-            department_name
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            course_code,
-            title,
-            credits,
-            description,
-            url,
-            faculty_name,
-            department_name
-        ))
+            credit_match = re.search(
+                r"(\d+\.\d+)\s*Credits?",
+                header,
+                re.IGNORECASE
+            )
 
-        print(
-            f"Inserted: {course_code} | {department_name}"
-        )
+            if not code_match:
+                print(f"Could not extract course code: {url}")
+                continue
 
-    except Exception as e:
+            course_code = code_match.group(1)
 
-        print(f"Error processing: {url}")
-        print(e)
+            credits = ""
 
-conn.commit()
-conn.close()
+            if credit_match:
+                credits = credit_match.group(1)
 
-print("Done!")
+            # Remove course code
+            title = re.sub(
+                r"^[A-Z]{2,4}\d{3}[A-Z]?\s*",
+                "",
+                header
+            )
+
+            # Remove credits
+            title = re.sub(
+                r"\s*\d+\.\d+\s*Credits?$",
+                "",
+                title,
+                flags=re.IGNORECASE
+            )
+
+            title = title.strip()
+
+            # Description = first paragraph after h1
+            description = ""
+
+            p_tag = h1_tags[1].find_next("p")
+
+            if p_tag:
+                description = p_tag.get_text(
+                    " ",
+                    strip=True
+                )
+
+            cursor.execute("""
+            INSERT INTO courses
+            (
+                course_code,
+                course_name,
+                credits,
+                description,
+                source_url,
+                faculty_name,
+                department_name,
+                level
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                course_code,
+                title,
+                credits,
+                description,
+                url,
+                faculty_name,
+                department_name,
+                level
+            ))
+
+            print(
+                f"Inserted: {course_code} | {department_name}"
+            )
+
+        except Exception as e:
+
+            print(f"Error processing: {url}")
+            print(e)
+
+    conn.commit()
+    conn.close()
+
+    print("Done!")
+
+
+if __name__ == "__main__":
+    load_courses(
+        course_links_csv="outputs/course_links.csv",
+        level="graduate"
+    )

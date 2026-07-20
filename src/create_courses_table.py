@@ -14,7 +14,8 @@ CREATE TABLE courses (
     description TEXT,
     source_url TEXT,
     faculty_name TEXT,
-    department_name TEXT
+    department_name TEXT,
+    level TEXT
 )
 """)
 

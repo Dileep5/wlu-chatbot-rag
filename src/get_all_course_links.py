@@ -3,90 +3,98 @@ import csv
 import re
 from bs4 import BeautifulSoup
 
-course_rows = []
 
-with open(
-    "outputs/departments.csv",
-    newline="",
-    encoding="utf-8"
-) as f:
+def scrape_course_links(departments_csv, output_path):
 
-    reader = csv.DictReader(f)
+    course_rows = []
 
-    for row in reader:
+    with open(departments_csv, newline="", encoding="utf-8") as f:
 
-        faculty_name = row["faculty_name"]
-        department_name = row["department_name"]
-        department_url = row["department_url"]
+        reader = csv.DictReader(f)
 
-        print(f"\nScanning: {department_name}")
+        for row in reader:
 
-        try:
+            faculty_name = row["faculty_name"]
+            department_name = row["department_name"]
+            department_url = row["department_url"]
 
-            response = requests.get(department_url)
+            print(f"\nScanning: {department_name}")
 
-            soup = BeautifulSoup(
-                response.text,
-                "html.parser"
-            )
+            try:
 
-            found = 0
+                response = requests.get(department_url)
 
-            for link in soup.find_all("a"):
-
-                href = link.get("href")
-                text = link.get_text(strip=True)
-
-                if not href:
-                    continue
-
-                if "course.php" not in href:
-                    continue
-
-                full_url = (
-                    "https://academic-calendar.wlu.ca/"
-                    + href
+                soup = BeautifulSoup(
+                    response.text,
+                    "html.parser"
                 )
 
-                course_code = text
+                found = 0
 
-                course_rows.append([
-                    faculty_name,
-                    department_name,
-                    course_code,
-                    full_url
-                ])
+                for link in soup.find_all("a"):
 
-                found += 1
+                    href = link.get("href")
+                    text = link.get_text(strip=True)
 
-            print(f"Found {found} courses")
+                    if not href:
+                        continue
 
-        except Exception as e:
+                    if "course.php" not in href:
+                        continue
 
-            print(
-                f"Error in {department_name}"
-            )
+                    full_url = (
+                        "https://academic-calendar.wlu.ca/"
+                        + href
+                    )
 
-            print(e)
+                    course_code = text
 
-with open(
-    "outputs/course_links.csv",
-    "w",
-    newline="",
-    encoding="utf-8"
-) as f:
+                    course_rows.append([
+                        faculty_name,
+                        department_name,
+                        course_code,
+                        full_url
+                    ])
 
-    writer = csv.writer(f)
+                    found += 1
 
-    writer.writerow([
-        "faculty_name",
-        "department_name",
-        "course_code",
-        "course_url"
-    ])
+                print(f"Found {found} courses")
 
-    writer.writerows(course_rows)
+            except Exception as e:
 
-print(
-    f"\nSaved {len(course_rows)} course links"
-)
+                print(
+                    f"Error in {department_name}"
+                )
+
+                print(e)
+
+    with open(
+        output_path,
+        "w",
+        newline="",
+        encoding="utf-8"
+    ) as f:
+
+        writer = csv.writer(f)
+
+        writer.writerow([
+            "faculty_name",
+            "department_name",
+            "course_code",
+            "course_url"
+        ])
+
+        writer.writerows(course_rows)
+
+    print(
+        f"\nSaved {len(course_rows)} course links"
+    )
+
+    return course_rows
+
+
+if __name__ == "__main__":
+    scrape_course_links(
+        departments_csv="outputs/departments.csv",
+        output_path="outputs/course_links.csv"
+    )

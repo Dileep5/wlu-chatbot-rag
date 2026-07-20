@@ -27,6 +27,25 @@ FOLLOWUP_PHRASES = [
 ]
 
 
+def _table_has_level_column(db_path, table_name):
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    columns = [row[1] for row in cursor.fetchall()]
+    conn.close()
+
+    return "level" in columns
+
+
+# The undergraduate-support sprint adds a `level` column to courses/programs/
+# departments, but older databases (before that migration has been re-run)
+# won't have it yet. Detect this once so retrieval keeps working either way.
+COURSES_HAVE_LEVEL = _table_has_level_column("data/courses.db", "courses")
+PROGRAMS_HAVE_LEVEL = _table_has_level_column("data/programs.db", "programs")
+DEPARTMENTS_HAVE_LEVEL = _table_has_level_column("data/departments.db", "departments")
+
+
 def search_course(question, memory=None):
 
     course_match = re.search(
@@ -45,13 +64,17 @@ def search_course(question, memory=None):
 
     cursor = conn.cursor()
 
-    cursor.execute("""
+    level_column = ", level" if COURSES_HAVE_LEVEL else ""
+
+    cursor.execute(f"""
     SELECT
         course_code,
         course_name,
         credits,
         description,
-        department_name
+        department_name,
+        source_url
+        {level_column}
     FROM courses
     WHERE course_code=?
     """, (course_code,))
@@ -66,6 +89,61 @@ def search_course(question, memory=None):
     return result
 
 
+# Generic normalization rules for program-name substring matching.
+# "Honours"/"Program"/"Degree" are pure qualifiers and are stripped
+# entirely. Degree-type phrases ("Bachelor of", "Master of", ...) are
+# collapsed to a short canonical token rather than deleted outright -
+# deleting them entirely would make "Bachelor of X" and "Master of X"
+# normalize to the same text and collide with each other, which is wrong
+# (a "Bachelor of" query should never resolve to a "Master of" program).
+_PROGRAM_NORMALIZE_RULES = [
+    (r"\bhonours\b", " "),
+    (r"\bhonors\b", " "),
+    (r"\bbachelor of\b", " bach "),
+    (r"\bmaster of\b", " mast "),
+    (r"\bdoctor of\b", " doc "),
+    (r"\bdiploma in\b", " dip "),
+    (r"\bprogram\b", " "),
+    (r"\bdegree\b", " "),
+]
+
+# For acronym generation we keep degree-type words (Bachelor/Master/Doctor/
+# Diploma all contribute a letter, e.g. the "B" in "BBA") but still strip
+# pure qualifiers that aren't part of the conventional abbreviation.
+_ACRONYM_QUALIFIER_PHRASES = [
+    "honours",
+    "honors",
+    "program",
+    "degree",
+]
+
+_ACRONYM_SKIP_WORDS = {"of", "in", "and", "the", "for", "with", "a", "an"}
+
+
+def _strip_filler(text):
+
+    text = text.lower()
+
+    for pattern, replacement in _PROGRAM_NORMALIZE_RULES:
+        text = re.sub(pattern, replacement, text)
+
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _generate_acronym(program_name):
+
+    text = program_name.lower()
+
+    for phrase in _ACRONYM_QUALIFIER_PHRASES:
+        text = re.sub(rf"\b{re.escape(phrase)}\b", " ", text)
+
+    words = re.findall(r"[a-zA-Z]+", text)
+
+    letters = [w[0] for w in words if w not in _ACRONYM_SKIP_WORDS]
+
+    return "".join(letters).upper()
+
+
 def search_program(question, memory=None):
 
     conn = sqlite3.connect(
@@ -74,11 +152,15 @@ def search_program(question, memory=None):
 
     cursor = conn.cursor()
 
-    cursor.execute("""
+    level_column = ", level" if PROGRAMS_HAVE_LEVEL else ""
+
+    cursor.execute(f"""
     SELECT
         program_name,
         admission_requirements,
-        program_requirements
+        program_requirements,
+        source_url
+        {level_column}
     FROM programs
     """)
 
@@ -86,11 +168,48 @@ def search_program(question, memory=None):
 
     conn.close()
 
-    question = question.lower()
+    question_lower = question.lower()
+
+    # Tier 1: exact stored-name substring match (highest priority, unchanged).
+    for row in rows:
+
+        if row[0].lower() in question_lower:
+
+            if memory is not None:
+                memory["last_program"] = row[0]
+
+            return row
+
+    # Tier 2: fallback - normalized-phrase match or generic acronym match,
+    # so users don't need to type the exact official title. Nothing here is
+    # specific to any one program; both are derived generically from
+    # whatever program_name is stored.
+    normalized_question = _strip_filler(question_lower)
 
     for row in rows:
 
-        if row[0].lower() in question:
+        program_name = row[0]
+
+        normalized_name = _strip_filler(program_name.lower())
+
+        if len(normalized_name) >= 3 and normalized_name in normalized_question:
+
+            if memory is not None:
+                memory["last_program"] = row[0]
+
+            return row
+
+        acronym = _generate_acronym(program_name)
+
+        # Require at least 3 letters and an exact-case match against the
+        # ORIGINAL question (not lowercased). Real acronym usage is almost
+        # always typed uppercase ("BBA", "MBA"); matching case-insensitively
+        # causes false positives against ordinary lowercase words that
+        # happen to coincide with a short acronym (e.g. "map" the verb vs.
+        # "MAP" for Master of Applied Politics, or "me" vs "ME").
+        if len(acronym) >= 3 and re.search(
+            rf"\b{re.escape(acronym)}\b", question
+        ):
 
             if memory is not None:
                 memory["last_program"] = row[0]
@@ -108,11 +227,15 @@ def search_department(question, memory=None):
 
     cursor = conn.cursor()
 
-    cursor.execute("""
+    level_column = ", level" if DEPARTMENTS_HAVE_LEVEL else ""
+
+    cursor.execute(f"""
     SELECT
         department_name,
         programs,
-        description
+        description,
+        source_url
+        {level_column}
     FROM departments
     """)
 
@@ -148,7 +271,16 @@ def search_vector(question):
     return results
 
 
-def hybrid_search(question, memory=None):
+def _level_line(result, index):
+
+    # '' if the level column wasn't queried (old, pre-undergraduate schema)
+    if len(result) <= index or not result[index]:
+        return ""
+
+    return f"Level: {result[index].capitalize()}\n"
+
+
+def structured_search(question, memory=None):
 
     # FOLLOWUP MEMORY
 
@@ -176,12 +308,12 @@ Course Code: {result[0]}
 Course Name: {result[1]}
 Credits: {result[2]}
 Department: {result[4]}
-
+{_level_line(result, 6)}
 Description:
 {result[3]}
 """
 
-        return context, "courses.db"
+        return context, result[5]
 
     # PROGRAM
 
@@ -191,7 +323,7 @@ Description:
 
         context = f"""
 Program: {result[0]}
-
+{_level_line(result, 4)}
 Admission Requirements:
 {result[1]}
 
@@ -199,7 +331,7 @@ Program Requirements:
 {result[2]}
 """
 
-        return context, "programs.db"
+        return context, result[3]
 
     # DEPARTMENT
 
@@ -209,7 +341,7 @@ Program Requirements:
 
         context = f"""
 Department: {result[0]}
-
+{_level_line(result, 4)}
 Programs:
 {result[1]}
 
@@ -217,7 +349,17 @@ Description:
 {result[2]}
 """
 
-        return context, "departments.db"
+        return context, result[3]
+
+    return None
+
+
+def hybrid_search(question, memory=None):
+
+    result = structured_search(question, memory)
+
+    if result:
+        return result
 
     # VECTOR SEARCH
 

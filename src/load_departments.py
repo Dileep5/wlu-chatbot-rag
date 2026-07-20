@@ -3,117 +3,168 @@ import sqlite3
 import requests
 from bs4 import BeautifulSoup
 
-# Connect database
-conn = sqlite3.connect("data/departments.db")
-cursor = conn.cursor()
+# Program-name line prefixes and the "who runs this department" text marker
+# differ by calendar level (verified against real graduate and undergraduate
+# department pages).
+GRADUATE_PROGRAM_PREFIXES = [
+    "Master of",
+    "Doctor of",
+    "Graduate Diploma",
+]
 
-# Clear old data
-cursor.execute("DELETE FROM departments")
+UNDERGRADUATE_PROGRAM_PREFIXES = [
+    "Honours Bachelor of",
+    "Honours BA",
+    "Honours BSc",
+    "Bachelor of",
+    "General BA",
+    "General BSc",
+    "Diploma in",
+    "Minor in",
+    "Specialization in",
+]
 
-# Read departments CSV
-with open("outputs/departments.csv", newline="", encoding="utf-8") as file:
 
-    reader = csv.DictReader(file)
+def extract_coordinator(page_text, level):
 
-    for row in reader:
+    if level == "graduate":
 
-        faculty_name = row["faculty_name"]
-        department_name = row["department_name"]
-        url = row["department_url"]
+        for marker in (
+            "Graduate Program Co-ordinator",
+            "Graduate Program Co-ordinators",
+        ):
+            if marker in page_text:
+                idx = page_text.find(marker)
+                return page_text[idx:idx + 500]
 
-        print(f"\nScanning: {department_name}")
+        return ""
 
-        try:
+    # undergraduate: pages use a "[Chair]" tag placed right after the
+    # person's name, e.g. "Matthew Smith [Chair]" - capture a window
+    # ending at the marker so the preceding name is included.
+    marker = "[Chair]"
 
-            response = requests.get(url)
+    if marker in page_text:
+        idx = page_text.find(marker)
+        start = max(0, idx - 120)
+        end = idx + len(marker)
+        return page_text[start:end]
 
-            if response.status_code != 200:
-                print("Failed")
-                continue
+    return ""
 
-            soup = BeautifulSoup(response.text, "html.parser")
 
-            page_text = soup.get_text("\n", strip=True)
+def extract_programs(page_text, level):
 
-            # -------------------------
-            # Coordinator
-            # -------------------------
+    prefixes = (
+        GRADUATE_PROGRAM_PREFIXES
+        if level == "graduate"
+        else UNDERGRADUATE_PROGRAM_PREFIXES
+    )
 
-            coordinator = ""
+    programs = []
 
-            if "Graduate Program Co-ordinator" in page_text:
-                idx = page_text.find("Graduate Program Co-ordinator")
-                coordinator = page_text[idx:idx + 500]
+    for line in page_text.split("\n"):
 
-            elif "Graduate Program Co-ordinators" in page_text:
-                idx = page_text.find("Graduate Program Co-ordinators")
-                coordinator = page_text[idx:idx + 500]
+        line = line.strip()
 
-            # -------------------------
-            # Programs
-            # -------------------------
+        if any(line.startswith(prefix) for prefix in prefixes):
+            programs.append(line)
 
-            programs = []
+    return " | ".join(sorted(set(programs)))
 
-            for line in page_text.split("\n"):
 
-                line = line.strip()
+def load_departments(departments_csv, level):
 
-                if (
-                    line.startswith("Master of")
-                    or line.startswith("Doctor of")
-                    or line.startswith("Graduate Diploma")
-                ):
-                    programs.append(line)
+    conn = sqlite3.connect("data/departments.db")
+    cursor = conn.cursor()
 
-            programs_text = " | ".join(sorted(set(programs)))
+    # Clear only this level's old data, so loading one level never
+    # wipes rows belonging to the other level.
+    cursor.execute("DELETE FROM departments WHERE level = ?", (level,))
 
-            # -------------------------
-            # Description
-            # -------------------------
+    with open(departments_csv, newline="", encoding="utf-8") as file:
 
-            description = ""
+        reader = csv.DictReader(file)
 
-            lines = page_text.split("\n")
+        for row in reader:
 
-            for i, line in enumerate(lines):
+            faculty_name = row["faculty_name"]
+            department_name = row["department_name"]
+            url = row["department_url"]
 
-                if line.strip() == department_name:
+            print(f"\nScanning: {department_name}")
 
-                    description = "\n".join(
-                        lines[i + 1:i + 20]
-                    )
+            try:
 
-                    break
+                response = requests.get(url)
 
-            # Insert
-            cursor.execute("""
-            INSERT INTO departments
-            (
-                faculty_name,
-                department_name,
-                coordinator,
-                programs,
-                description,
-                source_url
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                faculty_name,
-                department_name,
-                coordinator,
-                programs_text,
-                description,
-                url
-            ))
+                if response.status_code != 200:
+                    print("Failed")
+                    continue
 
-            print("Inserted")
+                soup = BeautifulSoup(response.text, "html.parser")
 
-        except Exception as e:
+                page_text = soup.get_text("\n", strip=True)
 
-            print("Error:", e)
+                coordinator = extract_coordinator(page_text, level)
 
-conn.commit()
-conn.close()
+                programs_text = extract_programs(page_text, level)
 
-print("\nDone!")
+                # -------------------------
+                # Description
+                # -------------------------
+
+                description = ""
+
+                lines = page_text.split("\n")
+
+                for i, line in enumerate(lines):
+
+                    if line.strip() == department_name:
+
+                        description = "\n".join(
+                            lines[i + 1:i + 20]
+                        )
+
+                        break
+
+                # Insert
+                cursor.execute("""
+                INSERT INTO departments
+                (
+                    faculty_name,
+                    department_name,
+                    coordinator,
+                    programs,
+                    description,
+                    source_url,
+                    level
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    faculty_name,
+                    department_name,
+                    coordinator,
+                    programs_text,
+                    description,
+                    url,
+                    level
+                ))
+
+                print("Inserted")
+
+            except Exception as e:
+
+                print("Error:", e)
+
+    conn.commit()
+    conn.close()
+
+    print("\nDone!")
+
+
+if __name__ == "__main__":
+    load_departments(
+        departments_csv="outputs/departments.csv",
+        level="graduate"
+    )

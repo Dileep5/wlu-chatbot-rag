@@ -2,30 +2,39 @@ import requests
 import csv
 from bs4 import BeautifulSoup
 
-url = "https://academic-calendar.wlu.ca/index_old.php?cal=3&y=94"
 
-response = requests.get(url)
-soup = BeautifulSoup(response.text, "html.parser")
+def scrape_programs(cal, year, output_path):
 
-programs = []
+    url = f"https://academic-calendar.wlu.ca/index_old.php?cal={cal}&y={year}"
 
-for link in soup.find_all("a"):
+    response = requests.get(url)
+    soup = BeautifulSoup(response.text, "html.parser")
 
-    text = link.get_text(strip=True)
-    href = link.get("href")
+    programs = []
 
-    if href and "s_pdt=" in href:
+    for link in soup.find_all("a"):
 
-        full_url = "https://academic-calendar.wlu.ca/" + href
+        text = link.get_text(strip=True)
+        href = link.get("href")
 
-        programs.append([text, full_url])
+        if href and "s_pdt=" in href:
 
-with open("outputs/graduate_programs.csv", "w", newline="", encoding="utf-8") as file:
+            full_url = "https://academic-calendar.wlu.ca/" + href
 
-    writer = csv.writer(file)
+            programs.append([text, full_url])
 
-    writer.writerow(["program_name", "program_url"])
+    with open(output_path, "w", newline="", encoding="utf-8") as file:
 
-    writer.writerows(programs)
+        writer = csv.writer(file)
 
-print(f"Saved {len(programs)} programs")
+        writer.writerow(["program_name", "program_url"])
+
+        writer.writerows(programs)
+
+    print(f"Saved {len(programs)} programs")
+
+    return programs
+
+
+if __name__ == "__main__":
+    scrape_programs(cal=3, year=94, output_path="outputs/graduate_programs.csv")

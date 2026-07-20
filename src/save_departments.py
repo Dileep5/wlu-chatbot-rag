@@ -2,50 +2,112 @@ import requests
 import csv
 from bs4 import BeautifulSoup
 
-departments = []
 
-with open("outputs/faculties.csv", newline="", encoding="utf-8") as f:
+def scrape_departments(faculties_csv, output_path):
 
-    reader = csv.DictReader(f)
+    departments = []
+    seen_urls = set()
+    to_expand = []
 
-    for row in reader:
+    with open(faculties_csv, newline="", encoding="utf-8") as f:
 
-        faculty_name = row["faculty_name"]
-        faculty_url = row["url"]
+        reader = csv.DictReader(f)
 
-        print("Scanning:", faculty_name)
+        for row in reader:
 
-        response = requests.get(faculty_url)
+            faculty_name = row["faculty_name"]
+            faculty_url = row["url"]
 
-        soup = BeautifulSoup(response.text, "html.parser")
+            print("Scanning:", faculty_name)
+
+            response = requests.get(faculty_url)
+
+            soup = BeautifulSoup(response.text, "html.parser")
+
+            for link in soup.find_all("a"):
+
+                text = link.get_text(strip=True)
+                href = link.get("href")
+
+                if href and "department.php" in href:
+
+                    full_url = "https://academic-calendar.wlu.ca/" + href
+
+                    if full_url in seen_urls:
+                        continue
+
+                    seen_urls.add(full_url)
+
+                    departments.append([
+                        faculty_name,
+                        text,
+                        full_url
+                    ])
+
+                    to_expand.append((faculty_name, text, full_url))
+
+                    print("  ", text)
+
+    # Some department pages are umbrella/overview pages for a combined
+    # subject area (e.g. "Computer Science and Physics") and link out to
+    # their real sub-departments one hop deeper, using the same
+    # department.php pattern. Follow those links too, generically, so
+    # sub-departments (and their courses) aren't missed.
+    while to_expand:
+
+        faculty_name, department_name, department_url = to_expand.pop(0)
+
+        try:
+            response = requests.get(department_url)
+            soup = BeautifulSoup(response.text, "html.parser")
+        except Exception as e:
+            print(f"Error expanding {department_name}: {e}")
+            continue
 
         for link in soup.find_all("a"):
 
             text = link.get_text(strip=True)
             href = link.get("href")
 
-            if href and "department.php" in href:
+            if not href or "department.php" not in href:
+                continue
 
-                full_url = "https://academic-calendar.wlu.ca/" + href
+            full_url = "https://academic-calendar.wlu.ca/" + href
 
-                departments.append([
-                    faculty_name,
-                    text,
-                    full_url
-                ])
+            if full_url in seen_urls:
+                continue
 
-                print("  ", text)
+            seen_urls.add(full_url)
 
-with open("outputs/departments.csv", "w", newline="", encoding="utf-8") as f:
+            departments.append([
+                faculty_name,
+                text,
+                full_url
+            ])
 
-    writer = csv.writer(f)
+            to_expand.append((faculty_name, text, full_url))
 
-    writer.writerow([
-        "faculty_name",
-        "department_name",
-        "department_url"
-    ])
+            print(f"   (sub-department of {department_name}):", text)
 
-    writer.writerows(departments)
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
 
-print(f"\nSaved {len(departments)} departments")
+        writer = csv.writer(f)
+
+        writer.writerow([
+            "faculty_name",
+            "department_name",
+            "department_url"
+        ])
+
+        writer.writerows(departments)
+
+    print(f"\nSaved {len(departments)} departments")
+
+    return departments
+
+
+if __name__ == "__main__":
+    scrape_departments(
+        faculties_csv="outputs/faculties.csv",
+        output_path="outputs/departments.csv"
+    )
