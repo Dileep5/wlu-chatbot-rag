@@ -324,6 +324,222 @@ def _strip_credentials(name):
     return name.split(",")[0].strip()
 
 
+# Signals a "list of people" intent rather than a single-department-info
+# or single-person intent - e.g. "Who works in Marketing?", "Who are the
+# Accounting faculty?", "List Computer Science faculty." This is checked
+# BEFORE any department-name matching happens; the name match alone is
+# what actually decides whether a real result comes back, so a broad
+# trigger here (e.g. "who is") is safe; it just costs one extra check on
+# queries that don't turn out to reference any real department.
+_DEPARTMENT_LIST_TRIGGER_PATTERNS = [
+    r"\bwho\s+(?:works|work|teaches|teach|is|are)\b",
+    r"\blist\b",
+]
+
+# Pure function/filler words stripped from the question before comparing
+# whatever's left against a stored department name. This is what lets
+# "List Computer Science faculty" resolve against the stored department
+# "Computer Science and Physics" even though neither string literally
+# contains the other in full.
+_DEPARTMENT_LIST_FILLER_WORDS = {
+    "who", "works", "work", "teaches", "teach", "is", "are", "the",
+    "in", "at", "of", "for", "list", "faculty", "professors",
+    "professor", "staff", "members", "member", "department",
+    "departments", "please", "tell", "me", "about", "what",
+}
+
+
+def _has_department_list_intent(question_lower):
+
+    return any(
+        re.search(pattern, question_lower)
+        for pattern in _DEPARTMENT_LIST_TRIGGER_PATTERNS
+    )
+
+
+def _department_list_residual(question_lower):
+
+    words = re.findall(r"[a-z]+", question_lower)
+
+    remaining = [w for w in words if w not in _DEPARTMENT_LIST_FILLER_WORDS]
+
+    return " ".join(remaining)
+
+
+# Cross-listed faculty store multiple department affiliations in one
+# " | "-joined field (see get_faculty_links.py) - splitting on that same
+# delimiter recovers the individual real department names to match
+# against, rather than requiring the full joined string as one unit.
+def _department_name_segments(cursor):
+
+    cursor.execute("SELECT DISTINCT department_name FROM faculty")
+
+    segments = set()
+
+    for (value,) in cursor.fetchall():
+        for part in value.split(" | "):
+            part = part.strip()
+            if part:
+                segments.add(part)
+
+    return sorted(segments, key=len, reverse=True)
+
+
+def search_faculty_by_department(question, memory=None):
+
+    if not FACULTY_DB_READY:
+        return None
+
+    question_lower = question.lower()
+
+    if not _has_department_list_intent(question_lower):
+        return None
+
+    conn = sqlite3.connect(
+        "data/faculty.db"
+    )
+
+    cursor = conn.cursor()
+
+    segments = _department_name_segments(cursor)
+
+    residual = _department_list_residual(question_lower)
+
+    matched_segment = None
+
+    for segment in segments:
+
+        segment_lower = segment.lower()
+
+        if len(segment_lower) < 3:
+            continue
+
+        if segment_lower in question_lower:
+            matched_segment = segment
+            break
+
+        if len(residual) >= 3 and (
+            residual in segment_lower or segment_lower in residual
+        ):
+            matched_segment = segment
+            break
+
+    if not matched_segment:
+        conn.close()
+        return None
+
+    cursor.execute(
+        "SELECT name, title FROM faculty WHERE department_name LIKE ? ORDER BY name",
+        (f"%{matched_segment}%",)
+    )
+
+    rows = cursor.fetchall()
+
+    conn.close()
+
+    if not rows:
+        return None
+
+    return matched_segment, rows
+
+
+# Faculty-level names ("Faculty of Science", "Faculty of Arts",
+# "Lazaridis School of Business and Economics") are a small, fixed set of
+# known institutional names, stored in the faculty_name column - a
+# different column from department_name. Matching them the same way
+# department names are matched (substring/residual containment) is what
+# let a bare residual word like "science" collide with an unrelated
+# department ("...Decision Sciences"), so this is a separate, stricter
+# mechanism: every significant word of a stored faculty name must appear
+# as a whole word in the question. Word-level equality (not substring
+# containment) means "science" and "sciences" are simply different words
+# and can't collide, and requiring ALL of a name's words - not just one -
+# rules out a short name matching whenever a longer, related name would
+# also fit.
+_FACULTY_LEVEL_FILLER_WORDS = _DEPARTMENT_LIST_FILLER_WORDS | {"school", "and"}
+
+
+def _significant_words(text, filler_words):
+
+    words = re.findall(r"[a-z]+", text.lower())
+
+    return {w for w in words if w not in filler_words}
+
+
+def _faculty_name_segments(cursor):
+
+    cursor.execute("SELECT DISTINCT faculty_name FROM faculty")
+
+    segments = set()
+
+    for (value,) in cursor.fetchall():
+        for part in value.split(" | "):
+            part = part.strip()
+            if part:
+                segments.add(part)
+
+    return segments
+
+
+def search_faculty_by_faculty_name(question, memory=None):
+
+    if not FACULTY_DB_READY:
+        return None
+
+    question_lower = question.lower()
+
+    if not _has_department_list_intent(question_lower):
+        return None
+
+    conn = sqlite3.connect(
+        "data/faculty.db"
+    )
+
+    cursor = conn.cursor()
+
+    segments = _faculty_name_segments(cursor)
+
+    question_words = _significant_words(question, _FACULTY_LEVEL_FILLER_WORDS)
+
+    # Exact set equality, not subset containment: a subset check would let
+    # "Faculty of Science" (word set {"science"}) match "Computer Science"
+    # too, since {"science"} is a subset of {"computer", "science"} - which
+    # would wrongly steal a department-level query. Requiring the two word
+    # sets to match exactly means an extra word like "computer" correctly
+    # rules the faculty-level name out, leaving it to department matching.
+    candidates = [
+        segment
+        for segment in segments
+        if _significant_words(segment, _FACULTY_LEVEL_FILLER_WORDS) == question_words
+        and question_words
+    ]
+
+    if not candidates:
+        conn.close()
+        return None
+
+    # Any tie is broken alphabetically - never by set/dict iteration
+    # order, which Python randomizes per process - so the result is
+    # stable across runs.
+    candidates.sort()
+
+    matched_segment = candidates[0]
+
+    cursor.execute(
+        "SELECT name, title FROM faculty WHERE faculty_name LIKE ? ORDER BY name",
+        (f"%{matched_segment}%",)
+    )
+
+    rows = cursor.fetchall()
+
+    conn.close()
+
+    if not rows:
+        return None
+
+    return matched_segment, rows
+
+
 def search_faculty(question, memory=None):
 
     if not FACULTY_DB_READY:
@@ -456,6 +672,30 @@ def _level_line(result, index):
     return f"Level: {result[index].capitalize()}\n"
 
 
+def _format_faculty_list_context(label, name, rows):
+
+    total = len(rows)
+    displayed = rows[:25]
+
+    faculty_lines = "\n".join(
+        f"- {faculty_name} ({title})" if title else f"- {faculty_name}"
+        for faculty_name, title in displayed
+    )
+
+    truncation_note = (
+        f"\n(Showing {len(displayed)} of {total} faculty members.)"
+        if total > len(displayed) else ""
+    )
+
+    return f"""
+{label}: {name}
+
+Faculty members:
+{faculty_lines}
+{truncation_note}
+"""
+
+
 def structured_search(question, memory=None):
 
     # FOLLOWUP MEMORY
@@ -511,6 +751,40 @@ Program Requirements:
 """
 
         return context, result[3]
+
+    # FACULTY-LEVEL LIST (e.g. "Faculty of Science", "Faculty of Arts")
+    # Tried before the department-level list check: these are a small,
+    # fixed set of known institutional names matched deterministically by
+    # exact word-set comparison against faculty_name, not the
+    # substring/residual matching department names use.
+
+    faculty_level_result = search_faculty_by_faculty_name(question, memory)
+
+    if faculty_level_result:
+
+        matched_faculty, faculty_rows = faculty_level_result
+
+        return (
+            _format_faculty_list_context("Faculty", matched_faculty, faculty_rows),
+            None
+        )
+
+    # DEPARTMENT - FACULTY LIST
+    # Must run before the single-department lookup below: both can match
+    # on the same department name, but a "who works in X" / "list X
+    # faculty" query wants the list of people, not the department's own
+    # generic description.
+
+    dept_list_result = search_faculty_by_department(question, memory)
+
+    if dept_list_result:
+
+        matched_department, faculty_rows = dept_list_result
+
+        return (
+            _format_faculty_list_context("Department", matched_department, faculty_rows),
+            None
+        )
 
     # DEPARTMENT
 
