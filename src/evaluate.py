@@ -745,11 +745,122 @@ def _check_beggar_recovered():
     )
 
 
+def _check_course_prerequisites():
+
+    import sqlite3
+
+    conn = sqlite3.connect(str(ROOT_DIR / "data" / "courses.db"))
+    cursor = conn.cursor()
+
+    # Prerequisite extraction: a known multi-code prerequisite (CP312)
+    # extracted correctly into both the raw text and the derived
+    # reference table.
+    cursor.execute(
+        "SELECT prerequisites_text FROM courses WHERE course_code = 'CP312'"
+    )
+    row = cursor.fetchone()
+    cp312_text = row[0] if row else ""
+
+    yield (
+        "Prerequisite extraction: CP312 raw text mentions its known prerequisites",
+        all(code in cp312_text for code in ["CP264", "CP114", "CP213", "CP214", "MA238"]),
+        f"got {cp312_text!r}"
+    )
+
+    # Hyperlink formatting: no fragmented text from newline-joining
+    # around the inline course-code links, and no stray space-before-
+    # punctuation artifacts from space-joining.
+    yield (
+        "Hyperlink formatting: prerequisite text has no embedded newlines",
+        "\n" not in cp312_text,
+        f"got {cp312_text!r}"
+    )
+
+    yield (
+        "Hyperlink formatting: no stray space before closing punctuation",
+        " )" not in cp312_text and " ." not in cp312_text and " ;" not in cp312_text,
+        f"got {cp312_text!r}"
+    )
+
+    cursor.execute(
+        "SELECT course_code FROM course_prerequisite_refs "
+        "WHERE course_code = 'CP312' ORDER BY required_course_code"
+    )
+    cp312_refs = [r[0] for r in cursor.fetchall()]
+
+    yield (
+        "Prerequisite extraction: CP312 has derived reference rows",
+        len(cp312_refs) >= 5,
+        f"found {len(cp312_refs)} reference rows for CP312"
+    )
+
+    # Fused-label handling: a course whose page fuses "Co-requisites" and
+    # "Prerequisites" into one unseparated label populates both fields
+    # with the same text, rather than being missed entirely by an exact
+    # label match.
+    cursor.execute(
+        "SELECT prerequisites_text, corequisites_text FROM courses "
+        "WHERE source_url LIKE '%c=75171%'"
+    )
+    row = cursor.fetchone()
+
+    yield (
+        "Fused-label handling: RE407's fused Co-requisites/Prerequisites label populates both fields",
+        bool(row) and bool(row[0]) and row[0] == row[1],
+        f"got {row!r}"
+    )
+
+    conn.close()
+
+    # Direct lookup, reverse lookup, and no-prerequisite fallback -
+    # exercised through structured_search(), not a raw DB query, since
+    # these are retrieval-layer behaviors (intent detection + graceful
+    # fallback wording), not just data presence.
+    sys.path.insert(0, str(SRC_DIR))
+    from retriever import structured_search
+
+    result = structured_search("What are the prerequisites for CP600?", {})
+    yield (
+        "Direct prerequisite lookup: CP600 (no prerequisites listed)",
+        bool(result) and "no prerequisites" in result[0].lower(),
+        f"got {result[0] if result else None!r}"
+    )
+
+    result = structured_search("What are the prerequisites for CP312?", {})
+    yield (
+        "Direct prerequisite lookup: CP312 (has prerequisites listed)",
+        bool(result) and "CP264" in result[0],
+        f"got {result[0] if result else None!r}"
+    )
+
+    result = structured_search("Which courses require CP264?", {})
+    yield (
+        "Reverse prerequisite lookup: courses requiring CP264",
+        bool(result) and "CP312" in result[0],
+        f"got {result[0] if result else None!r}"
+    )
+
+    result = structured_search("Does CP312 require CP264?", {})
+    yield (
+        "Relational prerequisite lookup: does CP312 require CP264",
+        bool(result) and "yes" in result[0].lower(),
+        f"got {result[0] if result else None!r}"
+    )
+
+    result = structured_search("What courses have no prerequisites listed?", {})
+    yield (
+        "No-prerequisite fallback: listing courses with none listed",
+        bool(result) and "no prerequisite" in result[0].lower(),
+        f"got {result[0][:100] if result else None!r}"
+    )
+
+
 def run_data_integrity_checks():
 
     checks = list(_check_url_normalization_collapses_variants())
     checks += list(_check_no_duplicate_faculty_records())
     checks += list(_check_email_extraction())
+    checks += list(_check_course_prerequisites())
     checks += list(_check_image_link_rejection())
     checks += list(_check_beggar_recovered())
 

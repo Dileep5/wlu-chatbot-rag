@@ -100,6 +100,13 @@ FACULTY_COURSES_TAUGHT_READY = _table_exists(
     "data/faculty.db", "faculty_courses_taught"
 )
 
+# course_prerequisite_refs is a separate, newer table (Sprint 6F) - may
+# not exist yet in every environment even when courses.db itself is
+# ready.
+COURSE_PREREQUISITE_REFS_READY = _table_exists(
+    "data/courses.db", "course_prerequisite_refs"
+)
+
 
 def search_course(question, memory=None):
 
@@ -142,6 +149,256 @@ def search_course(question, memory=None):
         memory["last_course"] = course_code
 
     return result
+
+
+_COURSE_CODE_TOKEN_PATTERN = re.compile(r"\b[A-Z]{2,4}\d{3}[A-Z]?\b")
+
+# Four deterministic patterns, tried in this order (most specific first)
+# so none of them can shadow another:
+#   1. reverse lookup   - "which courses require CP264?"
+#   2. no-prerequisite  - "what courses have no prerequisites listed?"
+#   3. relational       - "does CP312 require CP220?"
+#   4. direct lookup    - "what are the prerequisites for CP600?"
+# All four require course-code-shaped tokens in the right place, so none
+# of them collide with the "who has taught" / "has X taught Y courses"
+# detectors above (which require the word "taught", never present here).
+_REVERSE_PREREQUISITE_PATTERN = re.compile(
+    r"\bwhich\s+courses?\s+requires?\s+(.+)", re.IGNORECASE
+)
+_NO_PREREQUISITE_PATTERN = re.compile(
+    r"\bwhat\s+courses?\s+(?:have|has)\s+no\s+prerequisites?\b",
+    re.IGNORECASE
+)
+_REQUIRES_RELATIONSHIP_PATTERN = re.compile(
+    r"\bdoes\s+(.+?)\s+requires?\s+(.+)", re.IGNORECASE
+)
+_DIRECT_PREREQUISITE_PATTERN = re.compile(
+    r"\bprerequisites?\s+(?:for|of)\s+(.+)", re.IGNORECASE
+)
+
+
+def _extract_course_code(text):
+
+    match = _COURSE_CODE_TOKEN_PATTERN.search(text.upper())
+
+    return match.group() if match else None
+
+
+def _handle_direct_prerequisite_lookup(captured):
+
+    course_code = _extract_course_code(captured)
+
+    if not course_code:
+        return None
+
+    conn = sqlite3.connect("data/courses.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT course_name, prerequisites_text FROM courses "
+        "WHERE course_code = ?",
+        (course_code,)
+    )
+
+    row = cursor.fetchone()
+
+    conn.close()
+
+    if not row:
+        return (f"No course named {course_code} was found.", None)
+
+    course_name, prerequisites_text = row
+
+    if not prerequisites_text:
+        return (
+            f"No prerequisites are listed for {course_code} "
+            f"({course_name}).",
+            None
+        )
+
+    return (
+        f"Prerequisites for {course_code} ({course_name}):\n"
+        f"{prerequisites_text}",
+        None
+    )
+
+
+def _handle_reverse_prerequisite_lookup(captured):
+
+    required_code = _extract_course_code(captured)
+
+    if not required_code:
+        return None
+
+    conn = sqlite3.connect("data/courses.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT DISTINCT course_code FROM course_prerequisite_refs "
+        "WHERE required_course_code = ? ORDER BY course_code",
+        (required_code,)
+    )
+
+    codes = [row[0] for row in cursor.fetchall()]
+
+    conn.close()
+
+    if not codes:
+        return (
+            f"No courses were found that list {required_code} as a "
+            f"prerequisite.",
+            None
+        )
+
+    total = len(codes)
+    displayed = codes[:25]
+
+    lines = "\n".join(f"- {code}" for code in displayed)
+
+    truncation = (
+        f"\n(Showing {len(displayed)} of {total} courses.)"
+        if total > len(displayed) else ""
+    )
+
+    return (
+        f"Courses that require {required_code} as a prerequisite:\n"
+        f"{lines}{truncation}",
+        None
+    )
+
+
+def _handle_requires_relationship(course_phrase, required_phrase):
+
+    course_code = _extract_course_code(course_phrase)
+    required_code = _extract_course_code(required_phrase)
+
+    if not course_code or not required_code:
+        return None
+
+    conn = sqlite3.connect("data/courses.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT 1 FROM course_prerequisite_refs "
+        "WHERE course_code = ? AND required_course_code = ?",
+        (course_code, required_code)
+    )
+
+    has_ref = cursor.fetchone() is not None
+
+    cursor.execute(
+        "SELECT prerequisites_text FROM courses WHERE course_code = ?",
+        (course_code,)
+    )
+
+    row = cursor.fetchone()
+
+    conn.close()
+
+    if row is None:
+        return (f"No course named {course_code} was found.", None)
+
+    prerequisites_text = row[0]
+
+    # The derived reference table is checked first (fast, exact), but a
+    # direct word-boundary check against the raw prerequisites_text is
+    # still tried as a fallback - the reference table is a best-effort
+    # extraction and can miss complex phrasing the raw text still states
+    # plainly.
+    text_confirms = bool(
+        prerequisites_text
+        and re.search(rf"\b{required_code}\b", prerequisites_text.upper())
+    )
+
+    if has_ref or text_confirms:
+        return (
+            f"Yes, {course_code} lists {required_code} as a "
+            f"prerequisite.",
+            None
+        )
+
+    if prerequisites_text:
+        return (
+            f"{required_code} is not listed as a prerequisite for "
+            f"{course_code}. {course_code}'s listed prerequisites: "
+            f"{prerequisites_text}",
+            None
+        )
+
+    return (
+        f"No prerequisites are listed for {course_code}, so "
+        f"{required_code} is not a listed requirement.",
+        None
+    )
+
+
+def _handle_no_prerequisite_courses():
+
+    conn = sqlite3.connect("data/courses.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT course_code FROM courses "
+        "WHERE prerequisites_text IS NULL OR TRIM(prerequisites_text) = '' "
+        "ORDER BY course_code"
+    )
+
+    codes = [row[0] for row in cursor.fetchall()]
+
+    conn.close()
+
+    if not codes:
+        return ("Every course has a prerequisite listed.", None)
+
+    total = len(codes)
+    displayed = codes[:25]
+
+    lines = "\n".join(f"- {code}" for code in displayed)
+
+    count_note = (
+        f"Showing {len(displayed)} of {total} courses with no "
+        f"prerequisite listed."
+        if total > len(displayed) else
+        "This reflects what's published for each course, not "
+        "necessarily that none is required."
+    )
+
+    return (
+        f"Courses with no prerequisite listed:\n{lines}\n"
+        f"({count_note} This reflects what's published for each "
+        f"course, not necessarily that none is required.)"
+        if total > len(displayed) else
+        f"Courses with no prerequisite listed:\n{lines}\n({count_note})",
+        None
+    )
+
+
+def search_course_prerequisites(question, memory=None):
+
+    if not COURSE_PREREQUISITE_REFS_READY:
+        return None
+
+    match = _REVERSE_PREREQUISITE_PATTERN.search(question)
+
+    if match:
+        return _handle_reverse_prerequisite_lookup(match.group(1))
+
+    if _NO_PREREQUISITE_PATTERN.search(question):
+        return _handle_no_prerequisite_courses()
+
+    match = _REQUIRES_RELATIONSHIP_PATTERN.search(question)
+
+    if match:
+        return _handle_requires_relationship(
+            match.group(1), match.group(2)
+        )
+
+    match = _DIRECT_PREREQUISITE_PATTERN.search(question)
+
+    if match:
+        return _handle_direct_prerequisite_lookup(match.group(1))
+
+    return None
 
 
 # Deterministic "who has taught" intent detector - deliberately scoped to
@@ -1324,6 +1581,18 @@ def structured_search(question, memory=None):
 
     if person_topic_result:
         return person_topic_result
+
+    # COURSE PREREQUISITES
+    # Must run before the plain COURSE lookup below: "What are the
+    # prerequisites for CP600?" and "Does CP312 require CP220?" both
+    # contain a bare course code that search_course() would otherwise
+    # match first, returning the course description instead of
+    # answering the actual question.
+
+    prerequisite_result = search_course_prerequisites(question, memory)
+
+    if prerequisite_result:
+        return prerequisite_result
 
     # COURSE
 
