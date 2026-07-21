@@ -525,6 +525,136 @@ def run_test(test: TestCase) -> bool:
     return passed
 
 
+# -----------------------------
+# Data integrity checks (Sprint 6B)
+#
+# These guard against the faculty-profile URL-variance bug (Sprint 6A
+# audit issue #1) reappearing: www vs non-www, trailing slashes, stray
+# query parameters, legacy URL templates, and the malformed
+# "faculties..." pattern all used to defeat get_faculty_links.py's
+# exact-URL dedup and produce duplicate faculty rows for the same
+# person. Not AppTest-based like the categories above - these check the
+# scraper's URL normalization directly and the resulting database state,
+# not chatbot conversation behavior.
+# -----------------------------
+
+def _check_url_normalization_collapses_variants():
+
+    import sqlite3
+
+    sys.path.insert(0, str(SRC_DIR))
+    from get_faculty_links import _normalize_profile_url
+
+    # One representative pair per variant type confirmed in the Sprint
+    # 6A audit - each pair must normalize to the identical canonical URL.
+    variant_pairs = [
+        (
+            "www vs non-www",
+            "https://wlu.ca/academics/faculties/faculty-of-science/faculty-profiles/noam-miller/index.html",
+            "https://www.wlu.ca/academics/faculties/faculty-of-science/faculty-profiles/noam-miller/index.html",
+        ),
+        (
+            "stray query parameter",
+            "https://www.wlu.ca/academics/faculties/faculty-of-liberal-arts/faculty-profiles/kelly-gallagher-mackay/index.html?ref=faculty-profiles%2Fliberal-arts%2Fkelly-gallagher-mackay.html",
+            "https://www.wlu.ca/academics/faculties/faculty-of-liberal-arts/faculty-profiles/kelly-gallagher-mackay/index.html",
+        ),
+        (
+            "legacy URL template",
+            "https://www.wlu.ca/faculty-profiles/science/mihai-costea.html",
+            "https://www.wlu.ca/academics/faculties/faculty-of-science/faculty-profiles/mihai-costea/index.html",
+        ),
+        (
+            "malformed 'faculties...' pattern",
+            "https://www.wlu.ca/academics/faculties.../faculty-of-science/faculty-profiles/diane-gregory/index.html",
+            "https://www.wlu.ca/academics/faculties/faculty-of-science/faculty-profiles/diane-gregory/index.html",
+        ),
+        (
+            "stale current-pattern path (moved faculty)",
+            "https://wlu.ca/academics/faculties/faculty-of-arts/faculty-profiles/philip-marsh/index.html",
+            "https://www.wlu.ca/academics/faculties/faculty-of-science/faculty-profiles/philip-marsh/index.html",
+        ),
+    ]
+
+    for label, url_a, url_b in variant_pairs:
+
+        try:
+            norm_a = _normalize_profile_url(url_a)
+            norm_b = _normalize_profile_url(url_b)
+        except Exception as e:
+            yield (f"URL normalization: {label}", False, f"ERROR: {e}")
+            continue
+
+        yield (
+            f"URL normalization: {label}",
+            norm_a == norm_b,
+            f"{norm_a!r} vs {norm_b!r}"
+        )
+
+    # Trailing slash, checked without any live request involved.
+    no_slash = _normalize_profile_url(
+        "https://www.wlu.ca/academics/faculties/faculty-of-science/faculty-profiles/noam-miller/index.html"
+    )
+    with_slash = _normalize_profile_url(
+        "https://www.wlu.ca/academics/faculties/faculty-of-science/faculty-profiles/noam-miller/index.html/"
+    )
+    yield (
+        "URL normalization: trailing slash",
+        no_slash == with_slash,
+        f"{no_slash!r} vs {with_slash!r}"
+    )
+
+
+def _check_no_duplicate_faculty_records():
+
+    import sqlite3
+
+    conn = sqlite3.connect(str(ROOT_DIR / "data" / "faculty.db"))
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT name, COUNT(*) c FROM faculty GROUP BY name HAVING c > 1"
+    )
+    duplicate_names = cursor.fetchall()
+
+    cursor.execute(
+        "SELECT source_url, COUNT(*) c FROM faculty GROUP BY source_url HAVING c > 1"
+    )
+    duplicate_urls = cursor.fetchall()
+
+    conn.close()
+
+    yield (
+        "No duplicate faculty names in faculty.db",
+        len(duplicate_names) == 0,
+        f"duplicates found: {duplicate_names}" if duplicate_names else ""
+    )
+
+    yield (
+        "No duplicate faculty source_urls in faculty.db",
+        len(duplicate_urls) == 0,
+        f"duplicates found: {duplicate_urls}" if duplicate_urls else ""
+    )
+
+
+def run_data_integrity_checks():
+
+    checks = list(_check_url_normalization_collapses_variants())
+    checks += list(_check_no_duplicate_faculty_records())
+
+    passed_count = 0
+
+    for name, passed, detail in checks:
+        print(f"Check: {name}")
+        if detail:
+            print(f"Detail: {detail}")
+        print("PASS" if passed else "FAIL")
+        print("-" * 60)
+        if passed:
+            passed_count += 1
+
+    return passed_count, len(checks)
+
+
 def main():
     if not (ROOT_DIR / "data" / "courses.db").exists():
         print(
@@ -545,6 +675,8 @@ def main():
 
         scores[category] = (passed_count, len(tests))
 
+    integrity_passed, integrity_total = run_data_integrity_checks()
+
     print("\n" + "=" * 36)
     print("Evaluation Summary")
     print("=" * 36 + "\n")
@@ -557,6 +689,10 @@ def main():
         total_passed += passed_count
         total_count += count
         print(f"{label}: {passed_count}/{count}")
+
+    total_passed += integrity_passed
+    total_count += integrity_total
+    print(f"Data Integrity: {integrity_passed}/{integrity_total}")
 
     print(f"\nOverall Score: {total_passed}/{total_count}")
 

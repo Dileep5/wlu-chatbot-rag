@@ -1,6 +1,7 @@
+import re
 import requests
 import csv
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit
 from bs4 import BeautifulSoup
 
 # Behavior-driven configuration for each hub page's heading structure.
@@ -112,6 +113,50 @@ HEADERS = {
         "Chrome/125.0.0.0 Safari/537.36"
     )
 }
+
+
+def _normalize_profile_url(url):
+
+    # A confirmed, literal artifact found in the wild ("faculties..."
+    # instead of "faculties/faculty-of-x") - a raw href typo captured
+    # verbatim, not a URL-structure issue, so it's corrected before any
+    # structural parsing.
+    url = url.replace("faculties...", "faculties")
+
+    # Some discovered links are stale - not just the old pre-migration
+    # /faculty-profiles/<dept>/<name>.html template, but also current-
+    # looking paths for a profile that has since moved to a different
+    # faculty (confirmed live: a hub page can still link a profile's old
+    # path under the wrong faculty, which 301-redirects to where the
+    # profile actually lives now). Rather than only special-casing the
+    # one known old template, every candidate is resolved through an
+    # actual request so any such redirect is followed regardless of
+    # which URL shape triggered it. A failed request just falls back to
+    # normalizing the URL as given, rather than blocking the scrape.
+    try:
+        response = requests.head(
+            url, headers=HEADERS, timeout=15, allow_redirects=True
+        )
+        url = response.url
+
+    except Exception:
+        pass
+
+    parts = urlsplit(url)
+
+    netloc = parts.netloc
+
+    if netloc.lower().startswith("www."):
+        netloc = netloc[4:]
+
+    # Trailing slash and query string/fragment carry no profile-
+    # identifying information - dropping them is what collapses the
+    # "?ref=..." tracking-parameter variant (including the one the
+    # legacy-URL redirect above lands on) into the same canonical form
+    # as a direct link to the current-pattern URL.
+    path = parts.path.rstrip("/")
+
+    return urlunsplit((parts.scheme, netloc, path, "", ""))
 
 
 def _resolve_heading_text(source, h2_text, h3_text, faculty_name):
@@ -241,7 +286,12 @@ def scrape_faculty_links(output_path):
                 if not link_text:
                     continue
 
-                full_url = urljoin(hub_url, href)
+                # Normalized before the dedup check below - this is what
+                # collapses www/non-www, trailing slashes, stray query
+                # parameters, and legacy URL-template variants into a
+                # single canonical entry instead of separate duplicate
+                # profiles.
+                full_url = _normalize_profile_url(urljoin(hub_url, href))
 
                 if full_url not in profiles:
                     profiles[full_url] = {
