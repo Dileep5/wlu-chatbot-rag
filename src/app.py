@@ -10,6 +10,7 @@ from retriever import (
     resolve_contextual_reference,
     FOLLOWUP_PHRASES,
     normalize_followup_text,
+    create_memory,
 )
 from conversation import is_conversation
 from domain_guard import is_wlu_related
@@ -249,12 +250,7 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
 if "memory" not in st.session_state:
-    st.session_state.memory = {
-        "last_course": None,
-        "last_program": None,
-        "last_department": None,
-        "last_faculty": None,
-    }
+    st.session_state.memory = create_memory()
 
 
 # -----------------------------
@@ -287,6 +283,16 @@ query = st.chat_input(
 
 
 if query:
+
+    # One increment per user turn, read by every retrieval write-back
+    # site as the entity-history "turn_number" stamp (Sprint 9B) - done
+    # here, once, rather than in retriever.py, so a single turn that
+    # calls structured_search multiple times (e.g. resolve_contextual_
+    # reference re-invoking it with a rewritten question) still counts
+    # as one turn.
+    st.session_state.memory["turn_count"] = (
+        st.session_state.memory.get("turn_count", 0) + 1
+    )
 
     st.session_state.messages.append(
         {

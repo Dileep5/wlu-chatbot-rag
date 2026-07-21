@@ -619,15 +619,27 @@ MULTI_TURN_CONVERSATION_TESTS = [
         category="Multi-Turn Conversations",
     ),
     TestCase(
-        name="Clarification: unresolvable person reference after course-only context",
+        # This used to clarify: search_faculty_courses_taught() never
+        # wrote the resolved instructor back into memory, so "that
+        # professor" had nothing to resolve against (Sprint 7A's
+        # documented gap). Sprint 9B's entity-history write-back closes
+        # exactly this gap - CP312 is really taught by Angele Foley and
+        # Dariush Ebrahimi, and "that professor" now correctly resolves
+        # to one of them, grounding the answer in their real profile
+        # instead of clarifying. This is an intentional, expected
+        # behavior change, not a regression.
+        name="Multi-hop: course -> instructor -> grounded profile (entity-history write-back)",
         turns=[
             "Tell me about CP312.",
             "Who teaches it?",
             "Does that professor do AI research?",
         ],
-        check=lambda resp, at: is_clarification_response(resp),
+        check=lambda resp, at: (
+            contains_any(resp, "Foley", "Ebrahimi")
+            and not is_off_topic_decline(resp)
+            and not is_clarification_response(resp)
+        ),
         category="Multi-Turn Conversations",
-        metric="clarification",
     ),
     TestCase(
         name="Context switching: 'that course' tracks the most recent course, not the first",
@@ -660,6 +672,74 @@ MULTI_TURN_CONVERSATION_TESTS = [
         ],
         check=lambda resp, at: is_clarification_response(resp),
         category="Multi-Turn Conversations",
+        metric="clarification",
+    ),
+]
+
+# Protects: the entity-history model itself (Sprint 9B) - ordinal
+# references and list resolution, which had NO resolution mechanism at
+# all before this sprint (always clarified, since the four-slot memory
+# had no concept of a shown list or a position within one). Exercised
+# end-to-end via the real chatbot, not direct structured_search() calls.
+ENTITY_HISTORY_TESTS = [
+    TestCase(
+        name="Ordinal resolution: 'the first one' after a department faculty list",
+        turns=[
+            "Who works in Marketing?",
+            "Tell me about the first one.",
+        ],
+        check=lambda resp, at: (
+            contains_any(resp, "Ammara Mahmood")
+            and not is_clarification_response(resp)
+        ),
+        category="Entity History",
+    ),
+    TestCase(
+        name="Ordinal resolution: 'the second one' resolves a DIFFERENT person from the same list",
+        turns=[
+            "Who works in Marketing?",
+            "Tell me about the second one.",
+        ],
+        check=lambda resp, at: (
+            contains_any(resp, "Chatura Ranaweera")
+            and not is_clarification_response(resp)
+        ),
+        category="Entity History",
+    ),
+    TestCase(
+        name="Multi-hop ordinal: course -> prerequisite list -> 'the first one'",
+        turns=[
+            "Tell me about CP312.",
+            "What are its prerequisites?",
+            "Tell me about the first one.",
+        ],
+        check=lambda resp, at: (
+            contains_any(resp, "CP264")
+            and not is_clarification_response(resp)
+        ),
+        category="Entity History",
+    ),
+    TestCase(
+        name="List resolution: 'compare those' identifies real names instead of a bare generic decline",
+        turns=[
+            "Who works in Marketing?",
+            "Compare those.",
+        ],
+        check=lambda resp, at: (
+            is_clarification_response(resp)
+            and contains_any(resp, "Mahmood", "Ranaweera")
+        ),
+        category="Entity History",
+        metric="clarification",
+    ),
+    TestCase(
+        name="Ordinal reference with no prior list still clarifies gracefully (no crash, no hallucination)",
+        turns=[
+            "Tell me about CP312.",
+            "Tell me about the second one.",
+        ],
+        check=lambda resp, at: is_clarification_response(resp),
+        category="Entity History",
         metric="clarification",
     ),
 ]
@@ -723,6 +803,7 @@ CATEGORIES = [
     ("Course Prerequisites", "Prerequisites", COURSE_PREREQUISITE_TESTS),
     ("Graduate Program Requirements", "Grad Program Reqs", GRADUATE_PROGRAM_REQUIREMENTS_TESTS),
     ("Multi-Turn Conversations", "Multi-Turn", MULTI_TURN_CONVERSATION_TESTS),
+    ("Entity History", "Entity History", ENTITY_HISTORY_TESTS),
     ("Out-of-Domain Detection", "Out-of-Domain", OUT_OF_DOMAIN_TESTS),
 ]
 
@@ -744,6 +825,7 @@ CAPABILITY_COVERAGE = [
     ("Course prerequisites (direct/reverse/relational)", "Course Prerequisites"),
     ("Graduate program requirements (direct/reverse/relational)", "Graduate Program Requirements"),
     ("Multi-turn contextual reference resolution", "Multi-Turn Conversations"),
+    ("Entity-history ordinal/list resolution + cross-function write-back", "Entity History"),
     ("Out-of-domain detection", "Out-of-Domain Detection"),
     ("Scraper/extraction correctness (URLs, email, duplicates, prerequisites)", "Data Integrity"),
 ]
@@ -1295,6 +1377,136 @@ def _check_program_course_requirements():
     )
 
 
+def _check_entity_history_and_writeback():
+
+    sys.path.insert(0, str(SRC_DIR))
+    from retriever import (
+        create_memory, search_course, search_faculty_by_department,
+        structured_search, resolve_contextual_reference,
+    )
+
+    # Schema: the legacy four-slot dict stays exactly as it was (Sprint
+    # 9B requirement - do not remove it yet), with entity_history added
+    # alongside it, not in place of it.
+    mem = create_memory()
+
+    yield (
+        "create_memory() keeps all four legacy memory slots",
+        all(
+            k in mem
+            for k in ("last_course", "last_program", "last_department", "last_faculty")
+        ),
+        f"got keys: {sorted(mem.keys())}"
+    )
+
+    yield (
+        "create_memory() adds an empty entity_history alongside the legacy slots",
+        "entity_history" in mem and len(mem["entity_history"]) == 0,
+        f"got {mem.get('entity_history')!r}"
+    )
+
+    # Write-back: a function that already wrote the legacy slot before
+    # Sprint 9B (search_course) now writes entity_history too, without
+    # changing its legacy write at all.
+    mem = create_memory()
+    search_course("What is CP312?", mem)
+
+    yield (
+        "Write-back: search_course populates both the legacy slot and entity_history",
+        mem["last_course"] == "CP312"
+        and any(
+            e["entity_type"] == "course" and e["entity_id"] == "CP312"
+            for e in mem["entity_history"]
+        ),
+        f"last_course={mem['last_course']!r}, "
+        f"entity_history={list(mem['entity_history'])!r}"
+    )
+
+    # Write-back: search_faculty_by_department was one of the functions
+    # Sprint 9A found writes NOTHING at all - it has no legacy slot to
+    # write to, so this only shows up in entity_history.
+    mem = create_memory()
+    search_faculty_by_department("Who works in Marketing?", mem)
+    faculty_entries = [
+        e for e in mem["entity_history"] if e["entity_type"] == "faculty"
+    ]
+
+    yield (
+        "Write-back: search_faculty_by_department (previously silent) now populates entity_history as a list",
+        len(faculty_entries) >= 2 and all(e["list_id"] for e in faculty_entries),
+        f"got {len(faculty_entries)} faculty entries, "
+        f"list_ids={ {e['list_id'] for e in faculty_entries} }"
+    )
+
+    # Write-back: search_faculty_courses_taught was another previously-
+    # silent function - closing this exact gap is what lets "who teaches
+    # it?" -> "does that professor..." resolve instead of clarifying
+    # (see the updated Multi-Turn Conversations test).
+    mem = create_memory()
+    structured_search("Who has taught CP312?", mem)
+    course_taught_faculty = [
+        e for e in mem["entity_history"]
+        if e["entity_type"] == "faculty"
+        and e["source_function"] == "search_faculty_courses_taught"
+    ]
+
+    yield (
+        "Write-back: search_faculty_courses_taught (previously silent) now populates entity_history",
+        len(course_taught_faculty) >= 1,
+        f"got {course_taught_faculty!r}"
+    )
+
+    # Ordinal resolution: real data, real positions - "the first one" and
+    # "the second one" must resolve to two DIFFERENT real people from the
+    # same list, not the same person twice or an arbitrary guess.
+    mem_first = create_memory()
+    structured_search("Who works in Marketing?", mem_first)
+    first = resolve_contextual_reference("Tell me about the first one.", mem_first)
+
+    mem_second = create_memory()
+    structured_search("Who works in Marketing?", mem_second)
+    second = resolve_contextual_reference("Tell me about the second one.", mem_second)
+
+    yield (
+        "Ordinal resolution: 'first' and 'second' resolve to different real people from the same list",
+        bool(first) and bool(second)
+        and first[0] == "resolved" and second[0] == "resolved"
+        and first[1] != second[1],
+        f"first={first[1][:60] if first and len(first) > 1 else first!r}, "
+        f"second={second[1][:60] if second and len(second) > 1 else second!r}"
+    )
+
+    # Ordinal resolution: no list has ever been shown in this
+    # conversation - must clarify gracefully, never crash or invent a
+    # position that doesn't exist.
+    mem = create_memory()
+    search_course("What is CP312?", mem)
+    result = resolve_contextual_reference("Tell me about the second one.", mem)
+
+    yield (
+        "Ordinal resolution: no prior list yields a graceful clarification, not a crash",
+        bool(result) and result[0] == "clarify",
+        f"got {result!r}"
+    )
+
+    # List resolution: "compare those" is still a capability gap (no
+    # comparison feature exists for any entity type), but now identifies
+    # the real resolved entities by name in its clarification message
+    # instead of the bare generic decline used before Sprint 9B.
+    mem = create_memory()
+    structured_search("Who works in Marketing?", mem)
+    result = resolve_contextual_reference("Compare those.", mem)
+
+    yield (
+        "List resolution: 'compare those' clarifies with real identified names, not the bare generic message",
+        bool(result) and result[0] == "clarify" and result[1] != (
+            "I'm not sure what you're referring to. Could you clarify "
+            "or provide a bit more detail?"
+        ),
+        f"got {result!r}"
+    )
+
+
 def run_data_integrity_checks():
 
     checks = list(_check_url_normalization_collapses_variants())
@@ -1305,6 +1517,7 @@ def run_data_integrity_checks():
     checks += list(_check_beggar_recovered())
     checks += list(_check_contextual_reference_resolution())
     checks += list(_check_program_course_requirements())
+    checks += list(_check_entity_history_and_writeback())
 
     passed_count = 0
 

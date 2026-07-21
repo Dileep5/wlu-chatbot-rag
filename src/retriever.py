@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import re
+from collections import deque
 import chromadb
 from sentence_transformers import SentenceTransformer
 
@@ -51,6 +52,204 @@ _FOLLOWUP_TRAILING_PUNCTUATION = ".,!?;: "
 def normalize_followup_text(text):
 
     return text.lower().strip().rstrip(_FOLLOWUP_TRAILING_PUNCTUATION)
+
+
+# -----------------------------
+# Entity history (Sprint 9B)
+#
+# Introduced alongside the original four-slot memory (last_course/
+# last_program/last_department/last_faculty), which stays exactly as it
+# was - every existing read/write site for those four keys is untouched.
+# entity_history is a bounded, ordered log of every entity any retrieval
+# function has surfaced, richer than a single scalar per type: it carries
+# *which* function produced it, *when* (turn_number), how confidently,
+# and - for list-shaped answers (a department's faculty, a reverse
+# prerequisite lookup) - its position within that list, which is what
+# lets ordinal references ("the second one") resolve at all. The four-
+# slot dict has no way to represent any of this.
+# Deliberately larger than a single list write's cap (see
+# _record_entity_list's max_entries below) - a list write followed by a
+# trailing "primary subject" write (the ordering convention used
+# throughout this file) must never fill the deque so completely that the
+# trailing write evicts the list's own earliest position and corrupts
+# ordinal resolution for it.
+ENTITY_HISTORY_SIZE = 12
+
+# Every entity type an entity-history entry can carry. Mirrors the four
+# legacy types (course/program/department/faculty) plus two new ones
+# (faculty_institution for "Faculty of Science"-style lookups) that never
+# had a legacy slot to begin with - see _resolve_typed_value(), which
+# falls back to the legacy dict only for types that have one.
+_MEMORY_KEY_BY_TYPE = {
+    "course": "last_course",
+    "program": "last_program",
+    "department": "last_department",
+    "faculty": "last_faculty",
+}
+
+
+def create_memory():
+    """Fresh session memory: the original four-slot dict, unchanged, plus
+    the new entity-history structures alongside it (Sprint 9B). Nothing
+    reads this function's return value differently than a plain literal
+    dict - it just keeps the schema in one place."""
+
+    return {
+        "last_course": None,
+        "last_program": None,
+        "last_department": None,
+        "last_faculty": None,
+        "turn_count": 0,
+        "entity_history": deque(maxlen=ENTITY_HISTORY_SIZE),
+        "_list_counter": 0,
+        "_last_list_id": None,
+    }
+
+
+def _record_entity(
+    memory, entity_type, entity_id, display_name, source_function,
+    confidence="exact", list_id=None, list_position=None
+):
+    """Append one entity to memory['entity_history']. A no-op when memory
+    is None (mirrors the existing 'if memory is not None' guard used by
+    every legacy write site) and safe against a plain dict that doesn't
+    already have an 'entity_history' key (older/manually-built memory
+    dicts, e.g. in tests)."""
+
+    if memory is None or not entity_id:
+        return
+
+    history = memory.setdefault(
+        "entity_history", deque(maxlen=ENTITY_HISTORY_SIZE)
+    )
+
+    history.append({
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "display_name": display_name,
+        "source_function": source_function,
+        "turn_number": memory.get("turn_count", 0),
+        "confidence": confidence,
+        "list_id": list_id,
+        "list_position": list_position,
+    })
+
+
+def _record_entity_list(memory, entity_type, entities, source_function, max_entries=5):
+    """Record a list-shaped result (e.g. a department's faculty, a
+    reverse prerequisite lookup) as multiple entity-history entries
+    sharing one list_id, in display order. 'entities' is an iterable of
+    (entity_id, display_name) pairs. Also updates memory['_last_list_id']
+    so ordinal references ("the second one") always resolve against the
+    MOST RECENT list, independent of entity-history scan order.
+
+    Capped at 5 (not ENTITY_HISTORY_SIZE) deliberately: ordinal support
+    only recognizes first..fifth/last anyway (see _ORDINAL_POSITIONS),
+    and keeping list writes well under the deque's capacity leaves room
+    for a trailing primary-subject write (e.g. the course a courses-
+    taught list answers) without evicting the list's own early
+    positions."""
+
+    if memory is None:
+        return None
+
+    entities = [e for e in entities if e[0]]
+
+    if not entities:
+        return None
+
+    memory["_list_counter"] = memory.get("_list_counter", 0) + 1
+    list_id = f"L{memory['_list_counter']}_{source_function}"
+
+    for position, (entity_id, display_name) in enumerate(
+        entities[:max_entries], start=1
+    ):
+        _record_entity(
+            memory, entity_type, entity_id, display_name, source_function,
+            confidence="inferred" if len(entities) > 1 else "exact",
+            list_id=list_id, list_position=position,
+        )
+
+    memory["_last_list_id"] = list_id
+
+    return list_id
+
+
+def _latest_entity_of_type(memory, entity_type):
+    """The single best entity of a given type to use for a bare pronoun
+    ("it", "that professor"). Restricted to the most recent turn any
+    entity of this type was recorded in; within that turn, a standalone
+    entity (list_id is None - the turn's primary subject) is preferred
+    over a list entry, and among list entries the first-listed
+    (list_position 1) is preferred - a reasonable default when multiple
+    equally-recent candidates exist (e.g. two instructors returned by one
+    "who has taught" lookup) and there's no stronger signal to prefer one
+    over the other."""
+
+    if memory is None:
+        return None
+
+    history = memory.get("entity_history")
+
+    if not history:
+        return None
+
+    matches = [e for e in history if e["entity_type"] == entity_type]
+
+    if not matches:
+        return None
+
+    max_turn = max(e["turn_number"] for e in matches)
+    candidates = [e for e in matches if e["turn_number"] == max_turn]
+
+    candidates.sort(
+        key=lambda e: (e["list_id"] is not None, e.get("list_position") or 0)
+    )
+
+    return candidates[0]
+
+
+def _resolve_typed_value(memory, entity_type):
+    """The value resolve_contextual_reference() should substitute for a
+    given entity type - entity_history first (richer, covers every
+    Sprint 4-8 capability), falling back to the legacy four-slot dict
+    only for types that have a legacy slot at all. This is what lets
+    resolution keep working unchanged for memory dicts built the old way
+    (a plain {'last_course': 'CP312'} literal, as several existing tests
+    still do) while picking up richer history when it's present.
+
+    Returns the entry's display_name, not its entity_id: for
+    course/program/department the two are normally the same searchable
+    text (course code, program name, department name), but for faculty
+    entity_id is a stable source_url (the Sprint 6B convention, useful
+    for dedup/joins) that search_faculty()'s name-matching tiers can't
+    match against - only display_name (the person's actual name) is
+    valid text to substitute back into a question."""
+
+    if memory is None:
+        return None
+
+    entry = _latest_entity_of_type(memory, entity_type)
+
+    if entry:
+        return entry["display_name"]
+
+    legacy_key = _MEMORY_KEY_BY_TYPE.get(entity_type)
+
+    return memory.get(legacy_key) if legacy_key else None
+
+
+def _entities_in_list(memory, list_id):
+
+    if memory is None or not list_id:
+        return []
+
+    history = memory.get("entity_history") or []
+
+    return sorted(
+        (e for e in history if e.get("list_id") == list_id),
+        key=lambda e: e["list_position"]
+    )
 
 
 def _table_has_level_column(db_path, table_name):
@@ -154,6 +353,10 @@ def search_course(question, memory=None):
 
     if result and memory is not None:
         memory["last_course"] = course_code
+        _record_entity(
+            memory, "course", course_code, f"{course_code} - {result[1]}",
+            "search_course",
+        )
 
     return result
 
@@ -191,7 +394,7 @@ def _extract_course_code(text):
     return match.group() if match else None
 
 
-def _handle_direct_prerequisite_lookup(captured):
+def _handle_direct_prerequisite_lookup(captured, memory=None):
 
     course_code = _extract_course_code(captured)
 
@@ -216,6 +419,28 @@ def _handle_direct_prerequisite_lookup(captured):
 
     course_name, prerequisites_text = row
 
+    # The listed prerequisite courses themselves become resolvable
+    # entities too (e.g. "tell me about the first one" after "what are
+    # CP312's prerequisites?") - written before the subject course below
+    # so the subject stays the most recent single entity for bare
+    # pronoun resolution ("it" should still mean CP312, not its last
+    # prerequisite).
+    if prerequisites_text:
+        prereq_codes = list(dict.fromkeys(
+            _COURSE_CODE_TOKEN_PATTERN.findall(prerequisites_text.upper())
+        ))
+        if prereq_codes:
+            _record_entity_list(
+                memory, "course",
+                [(code, code) for code in prereq_codes],
+                "search_course_prerequisites",
+            )
+
+    _record_entity(
+        memory, "course", course_code, f"{course_code} - {course_name}",
+        "search_course_prerequisites",
+    )
+
     if not prerequisites_text:
         return (
             f"No prerequisites are listed for {course_code} "
@@ -230,7 +455,7 @@ def _handle_direct_prerequisite_lookup(captured):
     )
 
 
-def _handle_reverse_prerequisite_lookup(captured):
+def _handle_reverse_prerequisite_lookup(captured, memory=None):
 
     required_code = _extract_course_code(captured)
 
@@ -251,11 +476,24 @@ def _handle_reverse_prerequisite_lookup(captured):
     conn.close()
 
     if not codes:
+        _record_entity(
+            memory, "course", required_code, required_code,
+            "search_course_prerequisites",
+        )
         return (
             f"No courses were found that list {required_code} as a "
             f"prerequisite.",
             None
         )
+
+    _record_entity_list(
+        memory, "course", [(code, code) for code in codes],
+        "search_course_prerequisites",
+    )
+    _record_entity(
+        memory, "course", required_code, required_code,
+        "search_course_prerequisites",
+    )
 
     total = len(codes)
     displayed = codes[:25]
@@ -274,7 +512,7 @@ def _handle_reverse_prerequisite_lookup(captured):
     )
 
 
-def _handle_requires_relationship(course_phrase, required_phrase):
+def _handle_requires_relationship(course_phrase, required_phrase, memory=None):
 
     course_code = _extract_course_code(course_phrase)
     required_code = _extract_course_code(required_phrase)
@@ -306,6 +544,11 @@ def _handle_requires_relationship(course_phrase, required_phrase):
         return (f"No course named {course_code} was found.", None)
 
     prerequisites_text = row[0]
+
+    _record_entity(
+        memory, "course", course_code, course_code,
+        "search_course_prerequisites",
+    )
 
     # The derived reference table is checked first (fast, exact), but a
     # direct word-boundary check against the raw prerequisites_text is
@@ -339,7 +582,7 @@ def _handle_requires_relationship(course_phrase, required_phrase):
     )
 
 
-def _handle_no_prerequisite_courses():
+def _handle_no_prerequisite_courses(memory=None):
 
     conn = sqlite3.connect("data/courses.db")
     cursor = conn.cursor()
@@ -356,6 +599,11 @@ def _handle_no_prerequisite_courses():
 
     if not codes:
         return ("Every course has a prerequisite listed.", None)
+
+    _record_entity_list(
+        memory, "course", [(code, code) for code in codes],
+        "search_course_prerequisites",
+    )
 
     total = len(codes)
     displayed = codes[:25]
@@ -388,22 +636,22 @@ def search_course_prerequisites(question, memory=None):
     match = _REVERSE_PREREQUISITE_PATTERN.search(question)
 
     if match:
-        return _handle_reverse_prerequisite_lookup(match.group(1))
+        return _handle_reverse_prerequisite_lookup(match.group(1), memory)
 
     if _NO_PREREQUISITE_PATTERN.search(question):
-        return _handle_no_prerequisite_courses()
+        return _handle_no_prerequisite_courses(memory)
 
     match = _REQUIRES_RELATIONSHIP_PATTERN.search(question)
 
     if match:
         return _handle_requires_relationship(
-            match.group(1), match.group(2)
+            match.group(1), match.group(2), memory
         )
 
     match = _DIRECT_PREREQUISITE_PATTERN.search(question)
 
     if match:
-        return _handle_direct_prerequisite_lookup(match.group(1))
+        return _handle_direct_prerequisite_lookup(match.group(1), memory)
 
     return None
 
@@ -455,7 +703,7 @@ def _match_program_name(text):
     return None
 
 
-def _handle_reverse_program_requirement_lookup(captured):
+def _handle_reverse_program_requirement_lookup(captured, memory=None):
 
     course_code = _extract_course_code(captured)
 
@@ -476,11 +724,24 @@ def _handle_reverse_program_requirement_lookup(captured):
     conn.close()
 
     if not programs:
+        _record_entity(
+            memory, "course", course_code, course_code,
+            "search_program_course_requirements",
+        )
         return (
             f"No graduate program was found that lists {course_code} "
             f"as a required course, based on available structured data.",
             None
         )
+
+    _record_entity_list(
+        memory, "program", [(name, name) for name in programs],
+        "search_program_course_requirements",
+    )
+    _record_entity(
+        memory, "course", course_code, course_code,
+        "search_program_course_requirements",
+    )
 
     lines = "\n".join(f"- {name}" for name in programs)
 
@@ -490,7 +751,7 @@ def _handle_reverse_program_requirement_lookup(captured):
     )
 
 
-def _handle_program_requires_course(program_phrase, course_phrase):
+def _handle_program_requires_course(program_phrase, course_phrase, memory=None):
 
     course_code = _extract_course_code(course_phrase)
 
@@ -515,6 +776,15 @@ def _handle_program_requires_course(program_phrase, course_phrase):
 
     conn.close()
 
+    _record_entity(
+        memory, "program", program_name, program_name,
+        "search_program_course_requirements",
+    )
+    _record_entity(
+        memory, "course", course_code, course_code,
+        "search_program_course_requirements",
+    )
+
     if found:
         return (
             f"Yes, {program_name} lists {course_code} as a required "
@@ -531,7 +801,7 @@ def _handle_program_requires_course(program_phrase, course_phrase):
     )
 
 
-def _handle_program_required_courses(program_phrase):
+def _handle_program_required_courses(program_phrase, memory=None):
 
     program_name = _match_program_name(program_phrase)
 
@@ -552,11 +822,24 @@ def _handle_program_required_courses(program_phrase):
     conn.close()
 
     if not codes:
+        _record_entity(
+            memory, "program", program_name, program_name,
+            "search_program_course_requirements",
+        )
         return (
             f"No structured required-course data is available for "
             f"{program_name}.",
             None
         )
+
+    _record_entity_list(
+        memory, "course", [(code, code) for code in codes],
+        "search_program_course_requirements",
+    )
+    _record_entity(
+        memory, "program", program_name, program_name,
+        "search_program_course_requirements",
+    )
 
     lines = "\n".join(f"- {code}" for code in codes)
 
@@ -577,7 +860,9 @@ def search_program_course_requirements(question, memory=None):
     match = _REVERSE_PROGRAM_REQUIREMENT_PATTERN.search(question)
 
     if match:
-        result = _handle_reverse_program_requirement_lookup(match.group(1))
+        result = _handle_reverse_program_requirement_lookup(
+            match.group(1), memory
+        )
         if result:
             return result
 
@@ -585,7 +870,7 @@ def search_program_course_requirements(question, memory=None):
 
     if match:
         result = _handle_program_requires_course(
-            match.group(1), match.group(2)
+            match.group(1), match.group(2), memory
         )
         if result:
             return result
@@ -593,7 +878,7 @@ def search_program_course_requirements(question, memory=None):
     match = _PROGRAM_REQUIRED_COURSES_PATTERN.search(question)
 
     if match:
-        result = _handle_program_required_courses(match.group(1))
+        result = _handle_program_required_courses(match.group(1), memory)
         if result:
             return result
 
@@ -694,6 +979,10 @@ def search_faculty_courses_taught(question, memory=None):
 
     if not source_urls:
         conn.close()
+        _record_entity(
+            memory, "course", normalized_code, label,
+            "search_faculty_courses_taught",
+        )
         return (
             f"No faculty-taught record was found for {label}. This "
             f"reflects faculty profiles' self-reported teaching history, "
@@ -704,8 +993,8 @@ def search_faculty_courses_taught(question, memory=None):
     placeholders = ",".join("?" * len(source_urls))
 
     cursor.execute(
-        f"SELECT DISTINCT name, title FROM faculty "
-        f"WHERE source_url IN ({placeholders})",
+        f"SELECT DISTINCT name, title, source_url FROM faculty "
+        f"WHERE source_url IN ({placeholders}) ORDER BY name",
         source_urls
     )
 
@@ -714,14 +1003,38 @@ def search_faculty_courses_taught(question, memory=None):
     conn.close()
 
     if not rows:
+        _record_entity(
+            memory, "course", normalized_code, label,
+            "search_faculty_courses_taught",
+        )
         return (
             f"No faculty-taught record was found for {label}.",
             None
         )
 
+    # Recorded as a faculty list (using source_url - the stable key
+    # convention established in Sprint 6B, not a name that could vary in
+    # capitalization/credentials) so a later "that professor" can resolve
+    # to whoever taught this course - the exact multi-hop gap (course ->
+    # instructor -> ...) Sprint 9A identified as unresolvable before this
+    # write-back existed. The subject course is (re)recorded last so a
+    # bare "it" right after this turn still means the course, not one of
+    # its instructors.
+    _record_entity_list(
+        memory, "faculty",
+        [(source_url, name) for name, title, source_url in rows],
+        "search_faculty_courses_taught",
+    )
+    _record_entity(
+        memory, "course", normalized_code, label,
+        "search_faculty_courses_taught",
+    )
+
+    display_rows = [(name, title) for name, title, source_url in rows]
+
     return (
         _format_faculty_list_context(
-            "Faculty who have taught this course", label, rows
+            "Faculty who have taught this course", label, display_rows
         ),
         None
     )
@@ -920,6 +1233,14 @@ def search_faculty_courses_by_topic(question, memory=None):
             None
         )
 
+    # person_row was already recorded as a faculty entity inside
+    # search_faculty() above; only the returned courses are new here.
+    _record_entity_list(
+        memory, "course",
+        [(code, course_name) for code, course_name, alias in matches],
+        "search_faculty_courses_by_topic",
+    )
+
     lines = []
 
     for code, course_name, alias in matches:
@@ -1029,6 +1350,7 @@ def search_program(question, memory=None):
 
             if memory is not None:
                 memory["last_program"] = row[0]
+                _record_entity(memory, "program", row[0], row[0], "search_program")
 
             return row
 
@@ -1048,6 +1370,7 @@ def search_program(question, memory=None):
 
             if memory is not None:
                 memory["last_program"] = row[0]
+                _record_entity(memory, "program", row[0], row[0], "search_program")
 
             return row
 
@@ -1065,6 +1388,7 @@ def search_program(question, memory=None):
 
             if memory is not None:
                 memory["last_program"] = row[0]
+                _record_entity(memory, "program", row[0], row[0], "search_program")
 
             return row
 
@@ -1197,6 +1521,7 @@ def search_department(question, memory=None):
 
             if memory is not None:
                 memory["last_department"] = row[0]
+                _record_entity(memory, "department", row[0], row[0], "search_department")
 
             return row
 
@@ -1340,7 +1665,8 @@ def search_faculty_by_department(question, memory=None):
         return None
 
     cursor.execute(
-        "SELECT name, title FROM faculty WHERE department_name LIKE ? ORDER BY name",
+        "SELECT name, title, source_url FROM faculty "
+        "WHERE department_name LIKE ? ORDER BY name",
         (f"%{matched_segment}%",)
     )
 
@@ -1351,7 +1677,19 @@ def search_faculty_by_department(question, memory=None):
     if not rows:
         return None
 
-    return matched_segment, rows
+    _record_entity_list(
+        memory, "faculty",
+        [(source_url, name) for name, title, source_url in rows],
+        "search_faculty_by_department",
+    )
+    _record_entity(
+        memory, "department", matched_segment, matched_segment,
+        "search_faculty_by_department",
+    )
+
+    display_rows = [(name, title) for name, title, source_url in rows]
+
+    return matched_segment, display_rows
 
 
 # Faculty-level names ("Faculty of Science", "Faculty of Arts",
@@ -1437,7 +1775,8 @@ def search_faculty_by_faculty_name(question, memory=None):
     matched_segment = candidates[0]
 
     cursor.execute(
-        "SELECT name, title FROM faculty WHERE faculty_name LIKE ? ORDER BY name",
+        "SELECT name, title, source_url FROM faculty "
+        "WHERE faculty_name LIKE ? ORDER BY name",
         (f"%{matched_segment}%",)
     )
 
@@ -1448,7 +1787,19 @@ def search_faculty_by_faculty_name(question, memory=None):
     if not rows:
         return None
 
-    return matched_segment, rows
+    _record_entity_list(
+        memory, "faculty",
+        [(source_url, name) for name, title, source_url in rows],
+        "search_faculty_by_faculty_name",
+    )
+    _record_entity(
+        memory, "faculty_institution", matched_segment, matched_segment,
+        "search_faculty_by_faculty_name",
+    )
+
+    display_rows = [(name, title) for name, title, source_url in rows]
+
+    return matched_segment, display_rows
 
 
 def search_faculty(question, memory=None):
@@ -1494,6 +1845,9 @@ def search_faculty(question, memory=None):
 
             if memory is not None:
                 memory["last_faculty"] = row[0]
+                _record_entity(memory, "faculty", row[9], row[0], "search_faculty")
+                if row[3]:
+                    _record_entity(memory, "department", row[3], row[3], "search_faculty")
 
             return row
 
@@ -1523,6 +1877,9 @@ def search_faculty(question, memory=None):
 
             if memory is not None:
                 memory["last_faculty"] = row[0]
+                _record_entity(memory, "faculty", row[9], row[0], "search_faculty")
+                if row[3]:
+                    _record_entity(memory, "department", row[3], row[3], "search_faculty")
 
             return row
 
@@ -1554,6 +1911,9 @@ def search_faculty(question, memory=None):
 
                 if memory is not None:
                     memory["last_faculty"] = row[0]
+                    _record_entity(memory, "faculty", row[9], row[0], "search_faculty")
+                    if row[3]:
+                        _record_entity(memory, "department", row[3], row[3], "search_faculty")
 
                 return row
 
@@ -1681,12 +2041,20 @@ def search_faculty_by_research_topic(question, memory=None):
     conn.close()
 
     # Preserve Chroma's relevance ordering rather than SQL's row order.
-    rows = [fetched[u] for u in candidate_urls if u in fetched]
+    rows = [(u, fetched[u][0], fetched[u][1]) for u in candidate_urls if u in fetched]
 
     if not rows:
         return None
 
-    return topic, rows
+    _record_entity_list(
+        memory, "faculty",
+        [(url, name) for url, name, title in rows],
+        "search_faculty_by_research_topic",
+    )
+
+    display_rows = [(name, title) for url, name, title in rows]
+
+    return topic, display_rows
 
 
 def search_vector(question):
@@ -1965,15 +2333,26 @@ Research Interests:
 # memory, either substitutes it with a real entity and re-attempts
 # structured_search, or - if nothing in memory resolves it - returns a
 # clarification instead of ever reaching hybrid_search.
-_ALWAYS_CLARIFY_PATTERNS = [
-    # These refer to a position in a list of options ("the second one")
-    # or to multiple entities at once ("compare them") - memory has no
-    # concept of an ordered list of recently-shown options and only ever
-    # holds one value per slot, so there is nothing in the current
-    # memory model that could resolve these, regardless of what's set.
-    re.compile(r"\bcompare\s+(?:them|those|these|it)\b", re.IGNORECASE),
-    re.compile(r"\bthe\s+(?:first|second|third|last)\s+one\b", re.IGNORECASE),
-]
+# "Compare them/those/these/it" still always clarifies (Sprint 9B) - not
+# because the entities can't be resolved anymore (entity_history often
+# can identify them now), but because no comparison FEATURE exists for
+# any entity type. Resolution and capability are separate concerns: this
+# pattern is a capability gap, not a resolution gap, so it's kept apart
+# from the (now-resolvable) ordinal pattern below.
+_COMPARE_PATTERN = re.compile(
+    r"\bcompare\s+(?:them|those|these|it)\b", re.IGNORECASE
+)
+
+# Ordinal references ("the first one", "the second one", ...) - Sprint 9B
+# adds real resolution for these via entity_history's list_id/
+# list_position fields, which the four-slot dict had no way to
+# represent at all (hence why these always clarified before).
+_ORDINAL_PATTERN = re.compile(
+    r"\bthe\s+(first|second|third|fourth|fifth|last)\s+one\b",
+    re.IGNORECASE
+)
+
+_ORDINAL_POSITIONS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5}
 
 # Multi-word phrases that name the entity type explicitly - only that
 # one memory slot is ever tried, since the phrase itself is specific.
@@ -2007,13 +2386,6 @@ _GENERIC_REFERENCE_PATTERNS = [
     re.compile(r"\bthose\b", re.IGNORECASE),
     re.compile(r"\bthese\b", re.IGNORECASE),
 ]
-
-_MEMORY_KEY_BY_TYPE = {
-    "course": "last_course",
-    "program": "last_program",
-    "department": "last_department",
-    "faculty": "last_faculty",
-}
 
 _DEFAULT_TYPE_PRIORITY = ["course", "program", "department", "faculty"]
 _PERSON_TYPE_PRIORITY = ["faculty", "course", "program", "department"]
@@ -2057,7 +2429,7 @@ def _attempt_contextual_resolution(question, pattern, type_priority, memory):
         if not rule_pattern.search(question):
             continue
 
-        value = memory.get(_MEMORY_KEY_BY_TYPE[rule_type])
+        value = _resolve_typed_value(memory, rule_type)
 
         if not value:
             return ("clarify", _CLARIFICATION_MESSAGES[rule_type])
@@ -2074,7 +2446,7 @@ def _attempt_contextual_resolution(question, pattern, type_priority, memory):
 
     for entity_type in type_priority:
 
-        value = memory.get(_MEMORY_KEY_BY_TYPE[entity_type])
+        value = _resolve_typed_value(memory, entity_type)
 
         if not value:
             continue
@@ -2096,6 +2468,121 @@ def _attempt_contextual_resolution(question, pattern, type_priority, memory):
     return ("clarify", _GENERIC_CLARIFICATION_MESSAGE)
 
 
+def _resolve_ordinal_entity(memory, position_word):
+    """The entry at a given position within the MOST RECENT list-shaped
+    result (memory['_last_list_id']) - independent of entity_history scan
+    order, since ordinal references are about position within a list,
+    not general recency."""
+
+    if memory is None:
+        return None
+
+    list_id = memory.get("_last_list_id")
+
+    if not list_id:
+        return None
+
+    entries = _entities_in_list(memory, list_id)
+
+    if not entries:
+        return None
+
+    if position_word == "last":
+        return entries[-1]
+
+    index = _ORDINAL_POSITIONS.get(position_word)
+
+    if index is None or index > len(entries):
+        return None
+
+    return entries[index - 1]
+
+
+def _attempt_ordinal_resolution(question, position_word, memory):
+
+    entry = _resolve_ordinal_entity(memory, position_word)
+
+    if not entry:
+        return ("clarify", _GENERIC_CLARIFICATION_MESSAGE)
+
+    # display_name, not entity_id - see _resolve_typed_value()'s
+    # docstring: entity_id is a stable key (e.g. a faculty source_url),
+    # not necessarily valid text to substitute back into a question.
+    value = entry["display_name"]
+    entity_type = entry["entity_type"]
+
+    # Only apply an intent-rewrite rule if it targets the SAME type the
+    # ordinal resolved to (e.g. "prerequisites" only makes sense applied
+    # to a resolved course) - unlike the pronoun path above, an ordinal's
+    # type is already fixed by which list it came from, so a mismatched
+    # rule must fall through to generic substitution instead of forcing
+    # the wrong kind of lookup.
+    for rule_pattern, rule_type, template in _INTENT_REWRITE_RULES:
+
+        if rule_type != entity_type or not rule_pattern.search(question):
+            continue
+
+        rewritten_question = template.format(value=value)
+
+        result = structured_search(rewritten_question, memory)
+
+        if result:
+            context, source = result
+            return ("resolved", context, source)
+
+        return ("clarify", _CLARIFICATION_MESSAGES.get(entity_type, _GENERIC_CLARIFICATION_MESSAGE))
+
+    substituted_question = _ORDINAL_PATTERN.sub(value, question, count=1)
+
+    result = structured_search(substituted_question, memory)
+
+    if result:
+        context, source = result
+        return ("resolved", context, source)
+
+    return ("clarify", _CLARIFICATION_MESSAGES.get(entity_type, _GENERIC_CLARIFICATION_MESSAGE))
+
+
+def _compare_clarification(memory):
+
+    list_id = memory.get("_last_list_id") if memory else None
+
+    if list_id:
+
+        entries = _entities_in_list(memory, list_id)
+
+        if entries:
+            names = ", ".join(e["display_name"] for e in entries[:5])
+            # Every clarification message in this project starts with
+            # "I'm not sure" - it's the literal substring
+            # is_clarification_response() (evaluate.py) checks for, so
+            # this one keeps the same prefix instead of introducing a
+            # differently-worded message that would silently stop being
+            # recognized as a clarification.
+            return (
+                "clarify",
+                f"I'm not sure how to compare these directly, but I can "
+                f"tell you about them individually: {names}."
+            )
+
+    return ("clarify", _GENERIC_CLARIFICATION_MESSAGE)
+
+
+def _memory_has_any_context(memory):
+
+    # Legacy four-slot dict first (cheap, and covers every memory dict
+    # built the old way, e.g. plain literals in tests) - entity_history
+    # second, since several Sprint 9B write-backs (department->faculty
+    # list, research-topic list, courses-taught) populate ONLY
+    # entity_history and never touch the four legacy slots at all, so
+    # relying on the legacy check alone would wrongly treat that context
+    # as "empty".
+    if any(memory.get(key) for key in _MEMORY_KEY_BY_TYPE.values()):
+        return True
+
+    return bool(memory.get("entity_history"))
+
+
 def resolve_contextual_reference(question, memory=None):
 
     if memory is None:
@@ -2112,15 +2599,18 @@ def resolve_contextual_reference(question, memory=None):
     # in memory, this returns None so the existing routing (off-topic
     # gate, then hybrid search) handles the question exactly as it did
     # before this feature existed.
-    if not any(memory.get(key) for key in _MEMORY_KEY_BY_TYPE.values()):
+    if not _memory_has_any_context(memory):
         return None
 
     question_lower = question.lower()
 
-    for pattern in _ALWAYS_CLARIFY_PATTERNS:
+    if _COMPARE_PATTERN.search(question_lower):
+        return _compare_clarification(memory)
 
-        if pattern.search(question_lower):
-            return ("clarify", _GENERIC_CLARIFICATION_MESSAGE)
+    ordinal_match = _ORDINAL_PATTERN.search(question_lower)
+
+    if ordinal_match:
+        return _attempt_ordinal_resolution(question, ordinal_match.group(1), memory)
 
     for pattern, entity_type in _TYPE_HINTED_PATTERNS:
 
