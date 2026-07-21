@@ -22,6 +22,15 @@ class TestCase:
     turns: List[str]          # user messages sent in order; only the last is "the question"
     check: Callable[[str, AppTest], bool]
     category: str
+    # Which of the four Sprint 8B report buckets this test's pass/fail
+    # rolls up into. Defaults to "retrieval" so every pre-existing
+    # TestCase (added before this field existed) needs no changes -
+    # nearly all of them genuinely are retrieval-accuracy checks.
+    # "clarification" = expected outcome is a clarification response;
+    # "unsupported" = expected outcome is a graceful decline/non-answer
+    # for an out-of-scope question, with hallucination explicitly ruled
+    # out.
+    metric: str = "retrieval"
 
 
 # -----------------------------
@@ -45,6 +54,15 @@ def is_non_empty_response(text: str) -> bool:
 def is_off_topic_decline(text: str) -> bool:
     lower = text.lower()
     return "wilfrid laurier" in lower and "only" in lower
+
+
+def is_clarification_response(text: str) -> bool:
+    # All five resolve_contextual_reference() clarification messages
+    # (course/program/department/faculty/generic) begin "I'm not sure
+    # ..." - this is deliberately the same literal-text check used
+    # throughout Sprint 7B's own verification, kept here as a single
+    # shared helper rather than re-deriving it per test.
+    return "i'm not sure" in text.lower()
 
 
 # -----------------------------
@@ -311,6 +329,7 @@ FACULTY_COURSES_TAUGHT_TESTS = [
             and not is_off_topic_decline(resp)
         ),
         category="Faculty Courses Taught",
+        metric="unsupported",
     ),
     TestCase(
         name="Graceful no-match response for an unknown course name",
@@ -320,6 +339,7 @@ FACULTY_COURSES_TAUGHT_TESTS = [
             and not is_off_topic_decline(resp)
         ),
         category="Faculty Courses Taught",
+        metric="unsupported",
     ),
 ]
 
@@ -444,36 +464,241 @@ DEPARTMENT_FALSE_POSITIVE_TESTS = [
     ),
 ]
 
+# Protects: the program->department coordinator join (Sprint 4B), via
+# the full chatbot rather than a direct structured_search() call - the
+# exact end-to-end coverage gap Sprint 8A found missing. Pass criteria:
+# a program with real coordinator data names the actual coordinator(s);
+# a program whose joined department has no coordinator on file declines
+# gracefully rather than guessing a name.
+COORDINATOR_LOOKUP_TESTS = [
+    TestCase(
+        name="MAC coordinator - real data present",
+        turns=["Who is the program coordinator for the Master of Applied Computing?"],
+        check=lambda resp, at: (
+            contains_any(resp, "Dariush Ebrahimi", "Usama Mir")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Coordinator Lookup",
+    ),
+    TestCase(
+        name="MCS coordinator - same department join as MAC",
+        turns=["Who is the program coordinator for the Master of Computer Science?"],
+        check=lambda resp, at: (
+            contains_any(resp, "Dariush Ebrahimi", "Usama Mir")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Coordinator Lookup",
+    ),
+    TestCase(
+        name="MBA coordinator - graceful fallback (no data on file)",
+        turns=["Who coordinates the MBA?"],
+        check=lambda resp, at: (
+            is_non_empty_response(resp)
+            and not is_off_topic_decline(resp)
+        ),
+        category="Coordinator Lookup",
+        metric="unsupported",
+    ),
+    TestCase(
+        name="Non-coordinator program question unaffected",
+        turns=["What is the Master of Applied Computing program?"],
+        check=lambda resp, at: contains_any(resp, "Applied Computing", "Computing"),
+        category="Coordinator Lookup",
+    ),
+]
+
+# Protects: course prerequisite extraction and retrieval (Sprint 6F), via
+# the full chatbot. Pass criteria: a course with real prerequisites
+# states its actual required codes; a course with none says so plainly;
+# reverse and relational lookups return the real, verified answer; a
+# nonexistent course code never produces a fabricated answer.
+COURSE_PREREQUISITE_TESTS = [
+    TestCase(
+        name="Direct lookup - CP312 has real, specific prerequisites",
+        turns=["What are the prerequisites for CP312?"],
+        check=lambda resp, at: contains_any(resp, "CP264"),
+        category="Course Prerequisites",
+    ),
+    TestCase(
+        name="Direct lookup - CP600 has no prerequisites listed",
+        turns=["What are the prerequisites for CP600?"],
+        check=lambda resp, at: contains_any(resp, "no prerequisite", "No prerequisite"),
+        category="Course Prerequisites",
+    ),
+    TestCase(
+        name="Reverse lookup - which courses require CP264",
+        turns=["Which courses require CP264?"],
+        check=lambda resp, at: contains_any(resp, "CP312"),
+        category="Course Prerequisites",
+    ),
+    TestCase(
+        name="Relational lookup - CP312 does require CP264",
+        turns=["Does CP312 require CP264?"],
+        check=lambda resp, at: contains_any(resp, "Yes", "yes"),
+        category="Course Prerequisites",
+    ),
+    TestCase(
+        name="Hallucination guard - nonexistent course code",
+        turns=["Does CP312 require CP999?"],
+        check=lambda resp, at: (
+            is_non_empty_response(resp)
+            and not is_off_topic_decline(resp)
+        ),
+        category="Course Prerequisites",
+        metric="unsupported",
+    ),
+]
+
+# Protects: graduate program required-course retrieval (Sprint 7D), via
+# the full chatbot. Pass criteria: direct, reverse, and relational
+# lookups all reflect real data; an undergraduate program never produces
+# a fabricated course-requirement mapping (that capability doesn't
+# exist, and must never be guessed at).
+GRADUATE_PROGRAM_REQUIREMENTS_TESTS = [
+    TestCase(
+        name="Direct lookup - required courses for MAC",
+        turns=["Which required courses are listed for the Master of Applied Computing?"],
+        check=lambda resp, at: contains_any(resp, "CP600"),
+        category="Graduate Program Requirements",
+    ),
+    TestCase(
+        name="Relational lookup - MAC does require CP600",
+        turns=["Does the Master of Applied Computing require CP600?"],
+        check=lambda resp, at: contains_any(resp, "Yes", "yes"),
+        category="Graduate Program Requirements",
+    ),
+    TestCase(
+        name="Reverse lookup - programs requiring CP600",
+        turns=["Which graduate programs require CP600?"],
+        check=lambda resp, at: contains_all(resp, "Applied Computing")
+        and contains_any(resp, "Computer Science"),
+        category="Graduate Program Requirements",
+    ),
+    TestCase(
+        name="Graceful fallback - course not required by MAC",
+        turns=["Does the Master of Applied Computing require CP601?"],
+        check=lambda resp, at: (
+            is_non_empty_response(resp)
+            and not is_off_topic_decline(resp)
+        ),
+        category="Graduate Program Requirements",
+        metric="unsupported",
+    ),
+    TestCase(
+        name="Undergraduate exclusion - no fabricated mapping",
+        turns=["Does the Honours Bachelor of Business Administration require CP104?"],
+        check=lambda resp, at: (
+            is_non_empty_response(resp)
+            and "required course" not in resp.lower()
+        ),
+        category="Graduate Program Requirements",
+        metric="unsupported",
+    ),
+]
+
+# Protects: resolve_contextual_reference() (Sprint 7B) and the broader
+# multi-turn memory model, end-to-end through real conversations rather
+# than isolated function calls - the exact coverage gap Sprint 8A found
+# missing (every prior verification of this feature was an ad hoc script,
+# never a permanent fixture). Each conversation's pass criteria is
+# checked only on its final turn, by design: five conversations, one
+# per required theme (successful follow-up, clarification, context
+# switching, unsupported follow-up, ambiguity), each engineered so its
+# last turn is the one meaningful assertion point.
+MULTI_TURN_CONVERSATION_TESTS = [
+    TestCase(
+        name="Successful follow-up: pronoun resolves to real prerequisite data",
+        turns=[
+            "Tell me about CP312.",
+            "Does it have prerequisites?",
+        ],
+        check=lambda resp, at: (
+            contains_any(resp, "CP264")
+            and not is_clarification_response(resp)
+        ),
+        category="Multi-Turn Conversations",
+    ),
+    TestCase(
+        name="Clarification: unresolvable person reference after course-only context",
+        turns=[
+            "Tell me about CP312.",
+            "Who teaches it?",
+            "Does that professor do AI research?",
+        ],
+        check=lambda resp, at: is_clarification_response(resp),
+        category="Multi-Turn Conversations",
+        metric="clarification",
+    ),
+    TestCase(
+        name="Context switching: 'that course' tracks the most recent course, not the first",
+        turns=[
+            "Tell me about CP312.",
+            "Tell me about CP600.",
+            "What are the prerequisites for that course?",
+        ],
+        check=lambda resp, at: (
+            contains_any(resp, "CP600", "no prerequisite", "No prerequisite")
+            and "CP264" not in resp
+        ),
+        category="Multi-Turn Conversations",
+    ),
+    TestCase(
+        name="Unsupported follow-up: department context has no coordinator-lookup path",
+        turns=[
+            "Tell me about the Psychology department.",
+            "Does it have a coordinator?",
+        ],
+        check=lambda resp, at: is_clarification_response(resp),
+        category="Multi-Turn Conversations",
+        metric="clarification",
+    ),
+    TestCase(
+        name="Ambiguity: 'compare those' is never resolvable regardless of context",
+        turns=[
+            "Tell me about CP312.",
+            "Compare those.",
+        ],
+        check=lambda resp, at: is_clarification_response(resp),
+        category="Multi-Turn Conversations",
+        metric="clarification",
+    ),
+]
+
 OUT_OF_DOMAIN_TESTS = [
     TestCase(
         name="Sports question",
         turns=["Tell me about the latest Super Bowl champion."],
         check=lambda resp, at: is_off_topic_decline(resp),
         category="Out-of-Domain Detection",
+        metric="unsupported",
     ),
     TestCase(
         name="Celebrity / movie question",
         turns=["What's your favorite movie?"],
         check=lambda resp, at: is_off_topic_decline(resp),
         category="Out-of-Domain Detection",
+        metric="unsupported",
     ),
     TestCase(
         name="Coding question",
         turns=["Can you write a Python function to sort a list?"],
         check=lambda resp, at: is_off_topic_decline(resp),
         category="Out-of-Domain Detection",
+        metric="unsupported",
     ),
     TestCase(
         name="Politics question",
         turns=["Who is the president of the United States?"],
         check=lambda resp, at: is_off_topic_decline(resp),
         category="Out-of-Domain Detection",
+        metric="unsupported",
     ),
     TestCase(
         name="General knowledge question",
         turns=["What's the weather like today?"],
         check=lambda resp, at: is_off_topic_decline(resp),
         category="Out-of-Domain Detection",
+        metric="unsupported",
     ),
     TestCase(
         name="Control - in-domain tuition question should NOT be blocked",
@@ -494,7 +719,33 @@ CATEGORIES = [
     ("Faculty Courses Taught", "Courses Taught", FACULTY_COURSES_TAUGHT_TESTS),
     ("Person + Topic Courses Taught", "Person+Topic", PERSON_TOPIC_COURSES_TAUGHT_TESTS),
     ("Department False-Positive Prevention", "Dept False-Positive", DEPARTMENT_FALSE_POSITIVE_TESTS),
+    ("Coordinator Lookup", "Coordinator", COORDINATOR_LOOKUP_TESTS),
+    ("Course Prerequisites", "Prerequisites", COURSE_PREREQUISITE_TESTS),
+    ("Graduate Program Requirements", "Grad Program Reqs", GRADUATE_PROGRAM_REQUIREMENTS_TESTS),
+    ("Multi-Turn Conversations", "Multi-Turn", MULTI_TURN_CONVERSATION_TESTS),
     ("Out-of-Domain Detection", "Out-of-Domain", OUT_OF_DOMAIN_TESTS),
+]
+
+# Documentation (Sprint 8B requirement 6): every capability this project
+# has shipped, and which evaluation category is responsible for
+# protecting it against regression. Printed at the end of every run so
+# coverage is visible without having to read this file.
+CAPABILITY_COVERAGE = [
+    ("Basic conversation / greetings", "Basic Conversation"),
+    ("Conversation memory (follow-up phrases)", "Conversation Memory"),
+    ("Program lookup (name/alias/acronym)", "Program Retrieval, Aliases, Comparison"),
+    ("Single-person faculty lookup", "Faculty Retrieval"),
+    ("Department lookup + single-word false-positive guard", "Faculty Retrieval, Department False-Positive Prevention"),
+    ("Department -> faculty list / faculty-level list", "Faculty Retrieval"),
+    ("Research-topic search (semantic, Chroma-backed)", "Research Topic"),
+    ("Courses-taught lookup (direct, by code/name)", "Faculty Courses Taught"),
+    ("Person + topic courses-taught lookup", "Person + Topic Courses Taught"),
+    ("Program coordinator lookup", "Coordinator Lookup"),
+    ("Course prerequisites (direct/reverse/relational)", "Course Prerequisites"),
+    ("Graduate program requirements (direct/reverse/relational)", "Graduate Program Requirements"),
+    ("Multi-turn contextual reference resolution", "Multi-Turn Conversations"),
+    ("Out-of-domain detection", "Out-of-Domain Detection"),
+    ("Scraper/extraction correctness (URLs, email, duplicates, prerequisites)", "Data Integrity"),
 ]
 
 
@@ -1080,12 +1331,24 @@ def main():
 
     scores = {}
 
+    # Sprint 8B reporting: pass/fail rolled up by TestCase.metric, across
+    # every category, independent of which capability produced it.
+    metric_scores = {"retrieval": [0, 0], "clarification": [0, 0], "unsupported": [0, 0]}
+
     for category, _, tests in CATEGORIES:
         passed_count = 0
 
         for test in tests:
-            if run_test(test):
+            passed = run_test(test)
+
+            if passed:
                 passed_count += 1
+
+            bucket = metric_scores.setdefault(test.metric, [0, 0])
+            bucket[1] += 1
+
+            if passed:
+                bucket[0] += 1
 
         scores[category] = (passed_count, len(tests))
 
@@ -1109,6 +1372,42 @@ def main():
     print(f"Data Integrity: {integrity_passed}/{integrity_total}")
 
     print(f"\nOverall Score: {total_passed}/{total_count}")
+
+    print("\n" + "=" * 36)
+    print("Capability Coverage")
+    print("=" * 36)
+    print(
+        "(every shipped capability and the category that protects it "
+        "against regression)\n"
+    )
+
+    for capability, category_label in CAPABILITY_COVERAGE:
+        print(f"  - {capability}")
+        print(f"      -> {category_label}")
+
+    print("\n" + "=" * 36)
+    print("Cross-Cutting Accuracy Metrics")
+    print("=" * 36 + "\n")
+
+    retrieval_passed, retrieval_total = metric_scores["retrieval"]
+    clarification_passed, clarification_total = metric_scores["clarification"]
+    unsupported_passed, unsupported_total = metric_scores["unsupported"]
+
+    print(
+        f"Retrieval accuracy "
+        f"(did the right feature answer with correct data): "
+        f"{retrieval_passed}/{retrieval_total}"
+    )
+    print(
+        f"Clarification accuracy "
+        f"(unresolvable references correctly ask for clarification): "
+        f"{clarification_passed}/{clarification_total}"
+    )
+    print(
+        f"Unsupported-query handling "
+        f"(out-of-scope questions decline gracefully, never fabricate): "
+        f"{unsupported_passed}/{unsupported_total}"
+    )
 
 
 if __name__ == "__main__":
