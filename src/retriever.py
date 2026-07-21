@@ -254,6 +254,66 @@ def search_program(question, memory=None):
     return None
 
 
+# Signals the user wants the program's *coordinator* specifically, not
+# just general program information - e.g. "Who is the program coordinator
+# for the Master of Applied Computing?", "Who coordinates the MBA?". A
+# prefix match covers every inflection (coordinator/coordinators/
+# coordinates/coordinate/coordinating) without enumerating them.
+_COORDINATOR_INTENT_PATTERN = re.compile(r"\bcoordinat\w*\b")
+
+
+def _has_coordinator_intent(question_lower):
+
+    return bool(_COORDINATOR_INTENT_PATTERN.search(question_lower))
+
+
+# programs.db has no department_name/coordinator field of its own, but
+# both programs.db and departments.db source URLs come from the same
+# academic-calendar.wlu.ca site and carry the same "d=<id>" department-id
+# query parameter - so a program can be joined to its owning department
+# without any new scraping or schema change, just by matching that id
+# between the two already-scraped source_url values.
+def _extract_department_id(url):
+
+    if not url:
+        return None
+
+    match = re.search(r"[?&]d=(\d+)", url)
+
+    return match.group(1) if match else None
+
+
+def _get_department_coordinator(program_source_url):
+
+    department_id = _extract_department_id(program_source_url)
+
+    if not department_id:
+        return None
+
+    conn = sqlite3.connect(
+        "data/departments.db"
+    )
+
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT coordinator, source_url FROM departments")
+
+    rows = cursor.fetchall()
+
+    conn.close()
+
+    for coordinator, dept_source_url in rows:
+
+        if _extract_department_id(dept_source_url) == department_id:
+
+            if coordinator and coordinator.strip():
+                return coordinator.strip()
+
+            return None
+
+    return None
+
+
 def search_department(question, memory=None):
 
     conn = sqlite3.connect(
@@ -749,6 +809,19 @@ Admission Requirements:
 Program Requirements:
 {result[2]}
 """
+
+        # Coordinator info is only added when specifically asked for, so
+        # every other program query keeps producing exactly the context
+        # above, unchanged.
+        if _has_coordinator_intent(question_lower):
+
+            coordinator = _get_department_coordinator(result[3])
+
+            context += (
+                f"\nProgram Coordinator:\n{coordinator}\n"
+                if coordinator else
+                "\nProgram Coordinator: Coordinator information is not available.\n"
+            )
 
         return context, result[3]
 
