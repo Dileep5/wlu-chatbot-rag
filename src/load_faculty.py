@@ -126,9 +126,51 @@ def _extract_accordion_section(soup, heading_keywords):
     return ""
 
 
-def _extract_email(text):
+# Any *.wlu.ca subdomain, not just the literal "wlu.ca" - confirmed live
+# that some faculty (e.g. retired/emeritus accounts) use a subdomain
+# like "ret.wlu.ca" that the original wlu.ca-only pattern missed.
+_EMAIL_PATTERN = re.compile(
+    r"[\w.\-]+@(?:[\w\-]+\.)*wlu\.ca", re.IGNORECASE
+)
 
-    match = re.search(r"[\w\.-]+@wlu\.ca", text, re.IGNORECASE)
+
+def _deobfuscate_email_text(text):
+
+    # Anti-spam text obfuscation confirmed live in both visible link text
+    # ("jaguinaldo [at] wlu.ca") and, in one case, inside the mailto href
+    # itself ("mailto:pmallet [at] wlu [dot] ca") - normalized the same
+    # way regardless of where it's found.
+    text = re.sub(r"\s*\[\s*at\s*\]\s*", "@", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*\[\s*dot\s*\]\s*", ".", text, flags=re.IGNORECASE)
+
+    return text
+
+
+def _extract_email(soup, text):
+
+    # mailto hrefs first - the most reliable, structural source, and the
+    # only place the address exists at all for icon-only "Email" links
+    # with no visible address text. Only *.wlu.ca addresses are ever
+    # returned - a personal/external address in a mailto href (e.g. a
+    # Gmail account, confirmed live for one profile) is deliberately not
+    # surfaced, since that's a scope decision, not an extraction bug.
+    for anchor in soup.find_all("a", href=True):
+
+        href = anchor["href"]
+
+        if not href.lower().startswith("mailto:"):
+            continue
+
+        candidate = _deobfuscate_email_text(href[len("mailto:"):])
+        match = _EMAIL_PATTERN.search(candidate)
+
+        if match:
+            return match.group()
+
+    # Falls back to visible page text, also de-obfuscated, for any
+    # address shown as plain (possibly obfuscated) text with no mailto
+    # link backing it.
+    match = _EMAIL_PATTERN.search(_deobfuscate_email_text(text))
 
     return match.group() if match else ""
 
@@ -231,7 +273,7 @@ def load_faculty(faculty_links_csv):
                     if line.strip()
                 ]
 
-                email = _extract_email(page_text)
+                email = _extract_email(soup, page_text)
                 phone = _extract_phone(page_text)
                 office = _extract_office(lines)
 

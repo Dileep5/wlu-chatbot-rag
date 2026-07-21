@@ -636,10 +636,122 @@ def _check_no_duplicate_faculty_records():
     )
 
 
+def _check_email_extraction():
+
+    from bs4 import BeautifulSoup
+    from load_faculty import _extract_email
+
+    def extract(html):
+        soup = BeautifulSoup(html, "html.parser")
+        text = soup.get_text("\n", strip=True)
+        return _extract_email(soup, text)
+
+    cases = [
+        (
+            "Email extraction: mailto href with no visible address text",
+            '<a href="mailto:jbenhamrennick@wlu.ca">Email</a>',
+            "jbenhamrennick@wlu.ca",
+        ),
+        (
+            "Email extraction: [at]/[dot] obfuscated visible text",
+            '<p>Contact: jaguinaldo [at] wlu.ca</p>',
+            "jaguinaldo@wlu.ca",
+        ),
+        (
+            "Email extraction: [at]/[dot] obfuscated inside mailto href itself",
+            '<a href="mailto:pmallet [at] wlu [dot] ca">Email</a>',
+            "pmallet@wlu.ca",
+        ),
+        (
+            "Email extraction: *.wlu.ca subdomain (not just literal wlu.ca)",
+            '<a href="mailto:Eli.Teram@ret.wlu.ca">Email</a>',
+            "eli.teram@ret.wlu.ca",
+        ),
+        (
+            "Email extraction: non-wlu.ca mailto is not surfaced",
+            '<a href="mailto:someone@gmail.com">Email</a>',
+            "",
+        ),
+        (
+            "Email extraction: no email present yields empty string",
+            '<p>No contact information here.</p>',
+            "",
+        ),
+    ]
+
+    for name, html, expected in cases:
+        result = extract(html)
+        yield (
+            name,
+            result.lower() == expected.lower(),
+            f"got {result!r}, expected {expected!r}"
+        )
+
+
+def _check_image_link_rejection():
+
+    from get_faculty_links import _resolve_profile_href
+
+    cases = [
+        (
+            "Image-link rejection: .jpg resolves to index.html in same directory",
+            "faculty-profiles/abderrahman-beggar/faculty_arts_abderrahman_beggar.jpg",
+            "faculty-profiles/abderrahman-beggar/index.html",
+        ),
+        (
+            "Image-link rejection: other image extensions (.png, .jpeg, query string)",
+            "faculty-profiles/some-name/pic.jpeg?v=2",
+            "faculty-profiles/some-name/index.html",
+        ),
+        (
+            "Valid profile acceptance: a normal index.html href is unaffected",
+            "faculty-profiles/some-name/index.html",
+            "faculty-profiles/some-name/index.html",
+        ),
+    ]
+
+    for name, href, expected in cases:
+        result = _resolve_profile_href(href)
+        yield (name, result == expected, f"got {result!r}, expected {expected!r}")
+
+
+def _check_beggar_recovered():
+
+    import sqlite3
+
+    conn = sqlite3.connect(str(ROOT_DIR / "data" / "faculty.db"))
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT title, email, source_url FROM faculty "
+        "WHERE name = 'Abderrahman Beggar'"
+    )
+    row = cursor.fetchone()
+
+    conn.close()
+
+    if not row:
+        yield ("Abderrahman Beggar resolves to a real profile", False, "no row found")
+        return
+
+    title, email, source_url = row
+
+    yield (
+        "Abderrahman Beggar resolves to a real profile (not an image URL)",
+        bool(title) and not source_url.lower().endswith(
+            (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg")
+        ),
+        f"title={title!r}, email={email!r}, source_url={source_url!r}"
+    )
+
+
 def run_data_integrity_checks():
 
     checks = list(_check_url_normalization_collapses_variants())
     checks += list(_check_no_duplicate_faculty_records())
+    checks += list(_check_email_extraction())
+    checks += list(_check_image_link_rejection())
+    checks += list(_check_beggar_recovered())
 
     passed_count = 0
 

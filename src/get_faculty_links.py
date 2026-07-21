@@ -115,6 +115,34 @@ HEADERS = {
 }
 
 
+# Some hub-page entries link directly to a photo instead of the profile
+# page - confirmed live for Abderrahman Beggar's Faculty of Arts entry,
+# a genuine authoring mistake on WLU's own site (the only anchor for him
+# points at "faculty-profiles/abderrahman-beggar/....jpg", with no
+# separate link to a real page anywhere on the hub page). Every real
+# profile lives at <same-directory>/index.html, so rather than silently
+# dropping the person, the image filename is swapped for the standard
+# index page in the same directory instead of being discarded.
+_IMAGE_EXTENSIONS = (
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".tiff"
+)
+
+
+def _resolve_profile_href(href):
+
+    path = href.split("?")[0].split("#")[0]
+
+    if not path.lower().endswith(_IMAGE_EXTENSIONS):
+        return href
+
+    if "/" not in path:
+        return None
+
+    directory = path.rsplit("/", 1)[0]
+
+    return directory + "/index.html"
+
+
 def _normalize_profile_url(url):
 
     # A confirmed, literal artifact found in the wild ("faculties..."
@@ -269,6 +297,14 @@ def scrape_faculty_links(output_path):
                 href = el.get("href")
 
                 if not href or "faculty-profiles" not in href:
+                    continue
+
+                # Never accept an image file itself as a profile page -
+                # only its recovered index.html counterpart (or nothing,
+                # if there's no directory to recover from).
+                href = _resolve_profile_href(href)
+
+                if not href:
                     continue
 
                 if not _passes_category_check(config, current_h2, current_h3):
