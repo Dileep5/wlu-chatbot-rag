@@ -855,6 +855,88 @@ def _check_course_prerequisites():
     )
 
 
+def _check_contextual_reference_resolution():
+
+    sys.path.insert(0, str(SRC_DIR))
+    from retriever import resolve_contextual_reference, structured_search
+
+    empty_memory = {
+        "last_course": None, "last_program": None,
+        "last_department": None, "last_faculty": None,
+    }
+
+    # A completely empty memory is treated as "not applicable" (returns
+    # None, not a clarification) - see the guard at the top of
+    # resolve_contextual_reference(): with truly nothing established,
+    # a bare reference word is far more likely to be ordinary grammar in
+    # an unrelated sentence than a genuine follow-up. So "unresolved"
+    # here means a real multi-turn scenario: something IS in memory
+    # (matching how these cases actually arise in practice - e.g. a
+    # course was already discussed), but not the specific type this
+    # question needs, and the placeholder value is deliberately
+    # unmatchable so resolution genuinely fails rather than coincidentally
+    # succeeding.
+    partially_populated_memory = dict(empty_memory)
+    partially_populated_memory["last_department"] = "Placeholder Department 999"
+
+    unresolved_cases = [
+        ("unresolved 'it'", "Does it have prerequisites?"),
+        ("unresolved 'they'", "What research do they do?"),
+        ("unresolved 'that professor'", "Does that professor do AI research?"),
+        ("unresolved 'that course'", "What are its requirements?"),
+        ("unresolved comparison", "Compare those."),
+        ("unresolved ordinal reference", "Tell me about the second one."),
+    ]
+
+    for label, question in unresolved_cases:
+        result = resolve_contextual_reference(question, dict(partially_populated_memory))
+        yield (
+            f"Contextual reference: {label} produces a clarification",
+            bool(result) and result[0] == "clarify",
+            f"got {result!r}"
+        )
+
+    # Resolved cases: with real memory context, the same style of
+    # question is answered correctly rather than clarified or
+    # hallucinated - verified against known real data (CP312's actual
+    # prerequisites, confirmed elsewhere in this suite).
+    course_memory = dict(empty_memory)
+    course_memory["last_course"] = "CP312"
+
+    result = resolve_contextual_reference("Does it have prerequisites?", course_memory)
+    yield (
+        "Contextual reference: 'it' resolves to CP312's real prerequisites",
+        bool(result) and result[0] == "resolved" and "CP264" in result[1],
+        f"got {result[0] if result else None!r}"
+    )
+
+    result = resolve_contextual_reference("Who teaches it?", dict(course_memory))
+    yield (
+        "Contextual reference: 'it' resolves to CP312's real courses-taught data",
+        bool(result) and result[0] == "resolved",
+        f"got {result[:1] if result else None!r}"
+    )
+
+    # Standalone questions must never be intercepted - structured_search
+    # already succeeds on these, so resolve_contextual_reference is never
+    # even reached in the real app.py routing (it's only called after
+    # structured_search returns None). Verified directly here.
+    standalone_cases = [
+        "What is CP600?",
+        "Who is Tripat Gill?",
+        "Who works in Marketing?",
+    ]
+
+    for question in standalone_cases:
+        already_resolved = structured_search(question, dict(empty_memory))
+        yield (
+            f"Standalone question bypasses clarification: {question!r}",
+            bool(already_resolved),
+            "structured_search already resolves this without needing "
+            "the contextual-reference gate at all"
+        )
+
+
 def run_data_integrity_checks():
 
     checks = list(_check_url_normalization_collapses_variants())
@@ -863,6 +945,7 @@ def run_data_integrity_checks():
     checks += list(_check_course_prerequisites())
     checks += list(_check_image_link_rejection())
     checks += list(_check_beggar_recovered())
+    checks += list(_check_contextual_reference_resolution())
 
     passed_count = 0
 

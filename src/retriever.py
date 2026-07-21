@@ -1741,6 +1741,198 @@ Research Interests:
     return None
 
 
+# Sprint 7A found that falling through to hybrid/vector search on a bare
+# pronoun or vague follow-up ("Does it have prerequisites?", "Who
+# teaches it?") reliably produces a confident, fabricated answer - the
+# LLM has just enough chat history to sound plausible, but no actual
+# retrieved data to ground it. resolve_contextual_reference() is a
+# deterministic gate against exactly that: called only after
+# structured_search() has already failed on the raw question, it checks
+# for a contextual-reference marker and, using ONLY the existing 4-slot
+# memory, either substitutes it with a real entity and re-attempts
+# structured_search, or - if nothing in memory resolves it - returns a
+# clarification instead of ever reaching hybrid_search.
+_ALWAYS_CLARIFY_PATTERNS = [
+    # These refer to a position in a list of options ("the second one")
+    # or to multiple entities at once ("compare them") - memory has no
+    # concept of an ordered list of recently-shown options and only ever
+    # holds one value per slot, so there is nothing in the current
+    # memory model that could resolve these, regardless of what's set.
+    re.compile(r"\bcompare\s+(?:them|those|these|it)\b", re.IGNORECASE),
+    re.compile(r"\bthe\s+(?:first|second|third|last)\s+one\b", re.IGNORECASE),
+]
+
+# Multi-word phrases that name the entity type explicitly - only that
+# one memory slot is ever tried, since the phrase itself is specific.
+_TYPE_HINTED_PATTERNS = [
+    (re.compile(r"\bthat professor\b", re.IGNORECASE), "faculty"),
+    (re.compile(r"\bthe professor\b", re.IGNORECASE), "faculty"),
+    (re.compile(r"\bthat course\b", re.IGNORECASE), "course"),
+    (re.compile(r"\bthe course\b", re.IGNORECASE), "course"),
+    (re.compile(r"\bthat department\b", re.IGNORECASE), "department"),
+    (re.compile(r"\bthe department\b", re.IGNORECASE), "department"),
+    (re.compile(r"\bthat program\b", re.IGNORECASE), "program"),
+    (re.compile(r"\bthe program\b", re.IGNORECASE), "program"),
+]
+
+# "they"/"them" most commonly refer to a person in English, so faculty
+# is tried first, falling back to the standard priority below only if
+# no faculty is on record.
+_PERSON_HINTED_PATTERNS = [
+    re.compile(r"\bthey\b", re.IGNORECASE),
+    re.compile(r"\bthem\b", re.IGNORECASE),
+]
+
+# Bare, type-agnostic references - tried against each memory slot in the
+# same priority order structured_search() already uses for the
+# follow-up-phrase mechanism.
+_GENERIC_REFERENCE_PATTERNS = [
+    re.compile(r"\bit\b", re.IGNORECASE),
+    re.compile(r"\bits\b", re.IGNORECASE),
+    re.compile(r"\bthat\b", re.IGNORECASE),
+    re.compile(r"\bthis\b", re.IGNORECASE),
+    re.compile(r"\bthose\b", re.IGNORECASE),
+    re.compile(r"\bthese\b", re.IGNORECASE),
+]
+
+_MEMORY_KEY_BY_TYPE = {
+    "course": "last_course",
+    "program": "last_program",
+    "department": "last_department",
+    "faculty": "last_faculty",
+}
+
+_DEFAULT_TYPE_PRIORITY = ["course", "program", "department", "faculty"]
+_PERSON_TYPE_PRIORITY = ["faculty", "course", "program", "department"]
+
+_CLARIFICATION_MESSAGES = {
+    "course": "I'm not sure which course you mean. Could you mention the course code or name?",
+    "program": "I'm not sure which program you mean. Could you mention the program name?",
+    "department": "I'm not sure which department you mean. Could you mention the department name?",
+    "faculty": "I'm not sure which professor you're referring to. Could you mention their name?",
+}
+
+_GENERIC_CLARIFICATION_MESSAGE = (
+    "I'm not sure what you're referring to. Could you clarify or "
+    "provide a bit more detail?"
+)
+
+
+# Bare pattern.sub() substitution alone isn't reliable: search_course()
+# accepts a course code found ANYWHERE in the text, so substituting
+# "it" -> "CP312" in "Does it have prerequisites?" produces "Does CP312
+# have prerequisites?", which search_course() happily "matches" - but
+# only with the general course description, not the prerequisite text
+# the user actually asked for. Treating that as a successful resolution
+# would just relocate the hallucination risk (the LLM would still guess
+# at prerequisites from a context that doesn't contain them). These
+# rules are checked first and, when the original question's own wording
+# names a specific capability, rewrite directly into the exact phrasing
+# that capability's deterministic pattern expects - so a match only
+# counts as resolved when it's actually the right feature answering.
+_INTENT_REWRITE_RULES = [
+    (re.compile(r"\bprerequisites?\b", re.IGNORECASE), "course", "What are the prerequisites for {value}?"),
+    (re.compile(r"\bteach(?:es|ing|er)?\b", re.IGNORECASE), "course", "Who has taught {value}?"),
+    (re.compile(r"\bcoordinat\w*\b", re.IGNORECASE), "program", "Who is the program coordinator for {value}?"),
+]
+
+
+def _attempt_contextual_resolution(question, pattern, type_priority, memory):
+
+    for rule_pattern, rule_type, template in _INTENT_REWRITE_RULES:
+
+        if not rule_pattern.search(question):
+            continue
+
+        value = memory.get(_MEMORY_KEY_BY_TYPE[rule_type])
+
+        if not value:
+            return ("clarify", _CLARIFICATION_MESSAGES[rule_type])
+
+        rewritten_question = template.format(value=value)
+
+        result = structured_search(rewritten_question, memory)
+
+        if result:
+            context, source = result
+            return ("resolved", context, source)
+
+        return ("clarify", _CLARIFICATION_MESSAGES[rule_type])
+
+    for entity_type in type_priority:
+
+        value = memory.get(_MEMORY_KEY_BY_TYPE[entity_type])
+
+        if not value:
+            continue
+
+        # Generic fallback for questions with no specific-capability
+        # keyword above: substitutes only the matched marker, preserving
+        # the rest of the sentence, so the result still has to actually
+        # match an existing structured pattern to count as resolved.
+        substituted_question = pattern.sub(value, question, count=1)
+
+        result = structured_search(substituted_question, memory)
+
+        if result:
+            context, source = result
+            return ("resolved", context, source)
+
+        return ("clarify", _CLARIFICATION_MESSAGES[entity_type])
+
+    return ("clarify", _GENERIC_CLARIFICATION_MESSAGE)
+
+
+def resolve_contextual_reference(question, memory=None):
+
+    if memory is None:
+        memory = {}
+
+    # If nothing has ever been established in this conversation, a bare
+    # reference word is far more likely to be ordinary English grammar
+    # inside an unrelated sentence ("What is the philosophy behind this
+    # decision?", "This is just common sense psychology.") than a
+    # genuine follow-up to a prior answer - confirmed directly: without
+    # this guard, standalone sentences that merely contain "this"/"that"
+    # as normal phrasing were being intercepted even though there was no
+    # established context for them to be following up on. With nothing
+    # in memory, this returns None so the existing routing (off-topic
+    # gate, then hybrid search) handles the question exactly as it did
+    # before this feature existed.
+    if not any(memory.get(key) for key in _MEMORY_KEY_BY_TYPE.values()):
+        return None
+
+    question_lower = question.lower()
+
+    for pattern in _ALWAYS_CLARIFY_PATTERNS:
+
+        if pattern.search(question_lower):
+            return ("clarify", _GENERIC_CLARIFICATION_MESSAGE)
+
+    for pattern, entity_type in _TYPE_HINTED_PATTERNS:
+
+        if pattern.search(question_lower):
+            return _attempt_contextual_resolution(
+                question, pattern, [entity_type], memory
+            )
+
+    for pattern in _PERSON_HINTED_PATTERNS:
+
+        if pattern.search(question_lower):
+            return _attempt_contextual_resolution(
+                question, pattern, _PERSON_TYPE_PRIORITY, memory
+            )
+
+    for pattern in _GENERIC_REFERENCE_PATTERNS:
+
+        if pattern.search(question_lower):
+            return _attempt_contextual_resolution(
+                question, pattern, _DEFAULT_TYPE_PRIORITY, memory
+            )
+
+    return None
+
+
 def hybrid_search(question, memory=None):
 
     result = structured_search(question, memory)

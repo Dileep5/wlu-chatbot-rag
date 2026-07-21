@@ -7,6 +7,7 @@ from openai import OpenAI
 from retriever import (
     hybrid_search,
     structured_search,
+    resolve_contextual_reference,
     FOLLOWUP_PHRASES,
     normalize_followup_text,
 )
@@ -351,6 +352,36 @@ if query:
                     context
                 )
             )
+
+        # unresolved contextual reference ("it", "that professor", "the
+        # second one", ...) - checked only once structured_search has
+        # already failed on the raw question. A real match is grounded
+        # exactly like the structured branch above; a failure to resolve
+        # returns a clarification directly and must never fall through
+        # to hybrid/vector search, which is what let these produce
+        # confident, fabricated answers before (Sprint 7A).
+        elif (
+            contextual := resolve_contextual_reference(
+                query,
+                st.session_state.memory
+            )
+        ):
+
+            if contextual[0] == "resolved":
+
+                _, context, source = contextual
+
+                answer = (
+                    generate_answer(
+                        query,
+                        context
+                    )
+                )
+
+            else:
+
+                answer = contextual[1]
+                source = None
 
         # out-of-domain (memory follow-ups always bypass this check)
         elif (
