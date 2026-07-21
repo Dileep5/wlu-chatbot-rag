@@ -937,6 +937,113 @@ def _check_contextual_reference_resolution():
         )
 
 
+def _check_program_course_requirements():
+
+    import sqlite3
+
+    sys.path.insert(0, str(SRC_DIR))
+    from retriever import structured_search
+
+    # Required-course extraction: a known graduate program (verified live
+    # during Sprint 7D implementation) has its real required courses
+    # captured, keyed off the embedded course hyperlinks.
+    conn = sqlite3.connect(str(ROOT_DIR / "data" / "programs.db"))
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT course_code FROM program_course_requirements "
+        "WHERE program_name = 'Master of Applied Computing'"
+    )
+    mac_codes = {row[0] for row in cursor.fetchall()}
+    conn.close()
+
+    yield (
+        "Required-course extraction: Master of Applied Computing includes CP600",
+        "CP600" in mac_codes,
+        f"got {mac_codes!r}"
+    )
+
+    # Reverse lookup: which graduate programs require CP600 - known to
+    # include both MAC and Master of Computer Science.
+    result = structured_search("Which graduate programs require CP600?", {})
+    yield (
+        "Reverse lookup: programs requiring CP600 include MAC and MCS",
+        bool(result)
+        and "Master of Applied Computing" in result[0]
+        and "Master of Computer Science" in result[0],
+        f"got {result[0] if result else None!r}"
+    )
+
+    # Program lookup: does a known program require a known course, and
+    # does it correctly say no for a course it doesn't require.
+    result = structured_search(
+        "Does the Master of Applied Computing require CP600?", {}
+    )
+    yield (
+        "Program lookup: MAC does require CP600",
+        bool(result) and "yes" in result[0].lower(),
+        f"got {result[0] if result else None!r}"
+    )
+
+    result = structured_search(
+        "Does the Master of Applied Computing require CP601?", {}
+    )
+    yield (
+        "Program lookup: MAC does not require CP601",
+        bool(result) and "not listed" in result[0].lower(),
+        f"got {result[0] if result else None!r}"
+    )
+
+    result = structured_search(
+        "Which required courses are listed for the Master of Applied Computing?",
+        {}
+    )
+    yield (
+        "Program lookup: required courses listed for MAC",
+        bool(result) and "CP600" in result[0],
+        f"got {result[0] if result else None!r}"
+    )
+
+    # Graceful fallback: a course with no graduate program requiring it.
+    result = structured_search("Which graduate programs require CP999?", {})
+    yield (
+        "Graceful fallback: no program requires a nonexistent course code",
+        bool(result) and "no graduate program" in result[0].lower(),
+        f"got {result[0] if result else None!r}"
+    )
+
+    # Undergraduate exclusion: an undergraduate program name should never
+    # resolve through this feature - it must fall through to whatever
+    # existing behavior handles the query instead (never a fabricated
+    # undergraduate mapping claim).
+    conn = sqlite3.connect(str(ROOT_DIR / "data" / "programs.db"))
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT DISTINCT program_name FROM program_course_requirements"
+    )
+    requirement_program_names = {row[0] for row in cursor.fetchall()}
+    cursor.execute(
+        "SELECT program_name FROM programs WHERE level = 'undergraduate'"
+    )
+    undergrad_names = {row[0] for row in cursor.fetchall()}
+    conn.close()
+
+    yield (
+        "Undergraduate exclusion: no undergraduate program name in program_course_requirements",
+        len(undergrad_names & requirement_program_names) == 0,
+        f"overlap: {undergrad_names & requirement_program_names!r}"
+    )
+
+    result = structured_search(
+        "Does the Honours Bachelor of Business Administration require CP104?",
+        {}
+    )
+    yield (
+        "Undergraduate exclusion: no fabricated undergraduate program-requirement claim",
+        not bool(result) or "required course" not in result[0].lower(),
+        f"got {result[0] if result else None!r}"
+    )
+
+
 def run_data_integrity_checks():
 
     checks = list(_check_url_normalization_collapses_variants())
@@ -946,6 +1053,7 @@ def run_data_integrity_checks():
     checks += list(_check_image_link_rejection())
     checks += list(_check_beggar_recovered())
     checks += list(_check_contextual_reference_resolution())
+    checks += list(_check_program_course_requirements())
 
     passed_count = 0
 

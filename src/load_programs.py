@@ -1,7 +1,61 @@
 import csv
+import re
 import sqlite3
 import requests
 from bs4 import BeautifulSoup
+
+_COURSE_CODE_PATTERN = re.compile(r"\b[A-Z]{2,4}\d{3}[A-Z]?\b")
+
+
+def _extract_required_course_refs(program_soup):
+
+    # Graduate-only, simplified extraction (Sprint 7C/7D): structurally
+    # locate the "Program Requirements" section the same way course
+    # prerequisites were located in Sprint 6F (an anchored div.reqs
+    # block, not a fragile phrase-count heuristic - that heuristic is
+    # exactly what silently fails on undergraduate pages, confirmed
+    # during the Sprint 7C investigation). Every embedded course
+    # hyperlink found inside it is treated as "required" - electives,
+    # categorical rules ("1.0 senior CP elective" has no hyperlink at
+    # all, so it's naturally excluded), and option-specific breakdowns
+    # (Thesis vs. Co-op vs. Coursework) are deliberately not
+    # distinguished, per the approved simplified design.
+    anchor = program_soup.find("a", attrs={"name": "Program_Requirements"})
+
+    if not anchor:
+        return []
+
+    reqs_div = anchor.find_parent("div", class_="reqs")
+
+    if not reqs_div:
+        return []
+
+    refs = {}
+
+    for link in reqs_div.find_all("a", href=True):
+
+        if "course.php" not in link["href"]:
+            continue
+
+        match = _COURSE_CODE_PATTERN.search(link.get_text(strip=True).upper())
+
+        if not match:
+            continue
+
+        course_code = match.group()
+
+        if course_code in refs:
+            continue
+
+        context = link.find_parent("li") or link.find_parent("p")
+
+        raw_text = (
+            context.get_text(" ", strip=True)[:300] if context else ""
+        )
+
+        refs[course_code] = raw_text
+
+    return list(refs.items())
 
 
 def load_programs(programs_csv, level):
@@ -12,6 +66,15 @@ def load_programs(programs_csv, level):
     # Clear only this level's old data, so loading one level never
     # wipes rows belonging to the other level.
     cursor.execute("DELETE FROM programs WHERE level = ?", (level,))
+
+    # program_course_requirements is graduate-only by design (Sprint 7D)
+    # - it never holds undergraduate rows at all, so a full clear here is
+    # safe and must happen before the DELETE above would make a
+    # program-name-scoped clear query return nothing (the graduate rows
+    # it would need to match against no longer exist in `programs` by
+    # that point).
+    if level == "graduate":
+        cursor.execute("DELETE FROM program_course_requirements")
 
     with open(
         programs_csv,
@@ -202,6 +265,23 @@ def load_programs(programs_csv, level):
                 ))
 
                 print("Inserted")
+
+                if level == "graduate":
+
+                    for course_code, raw_text in _extract_required_course_refs(
+                        program_soup
+                    ):
+
+                        cursor.execute("""
+                        INSERT OR IGNORE INTO program_course_requirements
+                        (program_name, course_code, requirement_type, raw_text)
+                        VALUES (?, ?, ?, ?)
+                        """, (
+                            program_name,
+                            course_code,
+                            "required",
+                            raw_text,
+                        ))
 
             except Exception as e:
 

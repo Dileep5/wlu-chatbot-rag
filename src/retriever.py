@@ -107,6 +107,13 @@ COURSE_PREREQUISITE_REFS_READY = _table_exists(
     "data/courses.db", "course_prerequisite_refs"
 )
 
+# program_course_requirements is a separate, newer table (Sprint 7D),
+# graduate-only by design - may not exist yet in every environment even
+# when programs.db itself is ready.
+PROGRAM_COURSE_REQUIREMENTS_READY = _table_exists(
+    "data/programs.db", "program_course_requirements"
+)
+
 
 def search_course(question, memory=None):
 
@@ -397,6 +404,198 @@ def search_course_prerequisites(question, memory=None):
 
     if match:
         return _handle_direct_prerequisite_lookup(match.group(1))
+
+    return None
+
+
+# Graduate-only program-course requirement retrieval (Sprint 7D). The
+# "does X require Y" shape is shared with _REQUIRES_RELATIONSHIP_PATTERN
+# above, but that one only ever succeeds when BOTH sides look like course
+# codes, and returns None (not a fallback) otherwise - so a query like
+# "Does the Master of Applied Computing require CP600?" correctly falls
+# through search_course_prerequisites() untouched and reaches this
+# function next, which tries the same phrase shape with a program-name
+# interpretation instead.
+_REVERSE_PROGRAM_REQUIREMENT_PATTERN = re.compile(
+    r"\bwhich\s+(?:graduate\s+)?programs?\s+requires?\s+(.+)", re.IGNORECASE
+)
+_PROGRAM_REQUIRES_COURSE_PATTERN = re.compile(
+    r"\bdoes\s+(?:the\s+)?(.+?)\s+requires?\s+(.+)", re.IGNORECASE
+)
+_PROGRAM_REQUIRED_COURSES_PATTERN = re.compile(
+    r"\brequired\s+courses?\b.*?\bfor\s+(?:the\s+)?(.+)", re.IGNORECASE
+)
+
+
+def _all_requirement_program_names():
+
+    conn = sqlite3.connect("data/programs.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT DISTINCT program_name FROM program_course_requirements"
+    )
+
+    names = [row[0] for row in cursor.fetchall()]
+
+    conn.close()
+
+    return names
+
+
+def _match_program_name(text):
+
+    text_lower = text.lower()
+
+    for name in sorted(_all_requirement_program_names(), key=len, reverse=True):
+
+        if name.lower() in text_lower:
+            return name
+
+    return None
+
+
+def _handle_reverse_program_requirement_lookup(captured):
+
+    course_code = _extract_course_code(captured)
+
+    if not course_code:
+        return None
+
+    conn = sqlite3.connect("data/programs.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT DISTINCT program_name FROM program_course_requirements "
+        "WHERE course_code = ? ORDER BY program_name",
+        (course_code,)
+    )
+
+    programs = [row[0] for row in cursor.fetchall()]
+
+    conn.close()
+
+    if not programs:
+        return (
+            f"No graduate program was found that lists {course_code} "
+            f"as a required course, based on available structured data.",
+            None
+        )
+
+    lines = "\n".join(f"- {name}" for name in programs)
+
+    return (
+        f"Graduate programs that require {course_code}:\n{lines}",
+        None
+    )
+
+
+def _handle_program_requires_course(program_phrase, course_phrase):
+
+    course_code = _extract_course_code(course_phrase)
+
+    if not course_code:
+        return None
+
+    program_name = _match_program_name(program_phrase)
+
+    if not program_name:
+        return None
+
+    conn = sqlite3.connect("data/programs.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT 1 FROM program_course_requirements "
+        "WHERE program_name = ? AND course_code = ?",
+        (program_name, course_code)
+    )
+
+    found = cursor.fetchone() is not None
+
+    conn.close()
+
+    if found:
+        return (
+            f"Yes, {program_name} lists {course_code} as a required "
+            f"course.",
+            None
+        )
+
+    return (
+        f"{course_code} is not listed as a required course for "
+        f"{program_name}, based on available structured data. This "
+        f"only covers explicitly required courses - electives and "
+        f"categorical requirements aren't included.",
+        None
+    )
+
+
+def _handle_program_required_courses(program_phrase):
+
+    program_name = _match_program_name(program_phrase)
+
+    if not program_name:
+        return None
+
+    conn = sqlite3.connect("data/programs.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT DISTINCT course_code FROM program_course_requirements "
+        "WHERE program_name = ? ORDER BY course_code",
+        (program_name,)
+    )
+
+    codes = [row[0] for row in cursor.fetchall()]
+
+    conn.close()
+
+    if not codes:
+        return (
+            f"No structured required-course data is available for "
+            f"{program_name}.",
+            None
+        )
+
+    lines = "\n".join(f"- {code}" for code in codes)
+
+    return (
+        f"Required courses listed for {program_name}:\n{lines}\n"
+        f"(This reflects explicitly required courses only - electives "
+        f"and categorical requirements, such as \"choose N credits "
+        f"from...\", aren't included.)",
+        None
+    )
+
+
+def search_program_course_requirements(question, memory=None):
+
+    if not PROGRAM_COURSE_REQUIREMENTS_READY:
+        return None
+
+    match = _REVERSE_PROGRAM_REQUIREMENT_PATTERN.search(question)
+
+    if match:
+        result = _handle_reverse_program_requirement_lookup(match.group(1))
+        if result:
+            return result
+
+    match = _PROGRAM_REQUIRES_COURSE_PATTERN.search(question)
+
+    if match:
+        result = _handle_program_requires_course(
+            match.group(1), match.group(2)
+        )
+        if result:
+            return result
+
+    match = _PROGRAM_REQUIRED_COURSES_PATTERN.search(question)
+
+    if match:
+        result = _handle_program_required_courses(match.group(1))
+        if result:
+            return result
 
     return None
 
@@ -1593,6 +1792,20 @@ def structured_search(question, memory=None):
 
     if prerequisite_result:
         return prerequisite_result
+
+    # PROGRAM COURSE REQUIREMENTS (graduate only)
+    # Must also run before both the plain COURSE and PROGRAM lookups
+    # below: "Does the Master of Applied Computing require CP600?" and
+    # "Which required courses are listed for the Master of Applied
+    # Computing?" both contain a bare course code and/or an exact
+    # program name that those plain lookups would otherwise match first.
+
+    program_requirement_result = search_program_course_requirements(
+        question, memory
+    )
+
+    if program_requirement_result:
+        return program_requirement_result
 
     # COURSE
 
