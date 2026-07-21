@@ -19,7 +19,7 @@ def main():
     cursor = conn.cursor()
 
     cursor.execute("""
-    SELECT id, name, research_interests
+    SELECT source_url, name, research_interests
     FROM faculty
     WHERE research_interests IS NOT NULL
       AND TRIM(research_interests) != ''
@@ -47,19 +47,25 @@ def main():
     metadatas = []
     embeddings = []
 
-    for faculty_id, name, research_interests in rows:
+    for source_url, name, research_interests in rows:
 
-        # SQLite primary key as the Chroma document id - stable across
-        # rebuilds and independent of name (which can change or collide).
-        ids.append(str(faculty_id))
+        # source_url as the Chroma document id - stable across rebuilds,
+        # unlike faculty.id (an AUTOINCREMENT key that load_faculty.py
+        # reassigns on every full reload, since it does DELETE + re-insert
+        # rather than updating rows in place). A stale id here would
+        # silently make every research-topic query return no results,
+        # which is exactly what happened before this fix.
+        ids.append(source_url)
         documents.append(research_interests)
 
         # Minimal metadata: just enough to re-fetch the authoritative row
         # from faculty.db. SQLite remains the sole source of truth for
         # every displayed fact (title, department, contact info, etc.) -
-        # nothing here duplicates that.
+        # nothing here duplicates that. source_url is the only persistent
+        # key; name is kept purely as a convenience label, not an
+        # identifier - re-fetching always goes by source_url.
         metadatas.append({
-            "id": faculty_id,
+            "source_url": source_url,
             "name": name,
         })
 

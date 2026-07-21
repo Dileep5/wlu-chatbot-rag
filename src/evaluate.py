@@ -235,6 +235,45 @@ FACULTY_RETRIEVAL_TESTS = [
     ),
 ]
 
+RESEARCH_TOPIC_TESTS = [
+    TestCase(
+        name="Who researches machine learning",
+        turns=["Who researches machine learning?"],
+        check=lambda resp, at: (
+            contains_any(resp, "Azam Asilian Bidgoli", "Yang Liu", "Lei Gao", "Emad Mohammed")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Research Topic",
+    ),
+    TestCase(
+        name="Who researches artificial intelligence",
+        turns=["Who researches artificial intelligence?"],
+        check=lambda resp, at: (
+            contains_any(resp, "Lei Gao", "Samuel Okegbile", "Sukhjit Singh Sehra", "Emad Mohammed")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Research Topic",
+    ),
+    TestCase(
+        name="Who researches consumer behavior",
+        turns=["Who researches consumer behavior?"],
+        check=lambda resp, at: (
+            contains_any(resp, "Hae Joo Kim", "Sarah J. S. Wilner", "Sarah Wilner")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Research Topic",
+    ),
+    TestCase(
+        name="Who researches quantum computing",
+        turns=["Who researches quantum computing?"],
+        check=lambda resp, at: (
+            contains_any(resp, "Alexei Kaltchenko", "Li Wei", "Shohini Ghose")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Research Topic",
+    ),
+]
+
 FACULTY_COURSES_TAUGHT_TESTS = [
     TestCase(
         name="Who has taught a course code (CP104)",
@@ -330,6 +369,7 @@ CATEGORIES = [
     ("Program Aliases", "Aliases", PROGRAM_ALIAS_TESTS),
     ("Program Comparison", "Comparison", PROGRAM_COMPARISON_TESTS),
     ("Faculty Retrieval", "Faculty", FACULTY_RETRIEVAL_TESTS),
+    ("Research Topic", "Research Topic", RESEARCH_TOPIC_TESTS),
     ("Faculty Courses Taught", "Courses Taught", FACULTY_COURSES_TAUGHT_TESTS),
     ("Out-of-Domain Detection", "Out-of-Domain", OUT_OF_DOMAIN_TESTS),
 ]

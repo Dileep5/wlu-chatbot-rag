@@ -938,32 +938,38 @@ def search_faculty_by_research_topic(question, memory=None):
         include=["metadatas", "distances"]
     )
 
-    # Structured retrieval results first (ids + distances) - the
+    # Structured retrieval results first (source_urls + distances) - the
     # similarity threshold is applied here, before any SQLite access.
-    candidate_ids = [
-        meta["id"]
+    # source_url is the only persistent key read from Chroma metadata -
+    # unlike faculty.id, it stays valid across a faculty.db reload, since
+    # load_faculty.py reassigns ids (DELETE + re-insert) but never changes
+    # a profile's own URL.
+    candidate_urls = [
+        meta["source_url"]
         for meta, distance in zip(
             results["metadatas"][0], results["distances"][0]
         )
         if distance <= _RESEARCH_TOPIC_DISTANCE_THRESHOLD
     ]
 
-    if not candidate_ids:
+    if not candidate_urls:
         return None
 
     # Re-fetch the authoritative rows from SQLite - Chroma only ever
-    # decided *which* ids are relevant, never what to display for them.
+    # decided *which* profiles are relevant, never what to display for
+    # them.
     conn = sqlite3.connect(
         "data/faculty.db"
     )
 
     cursor = conn.cursor()
 
-    placeholders = ",".join("?" * len(candidate_ids))
+    placeholders = ",".join("?" * len(candidate_urls))
 
     cursor.execute(
-        f"SELECT id, name, title FROM faculty WHERE id IN ({placeholders})",
-        candidate_ids
+        f"SELECT source_url, name, title FROM faculty "
+        f"WHERE source_url IN ({placeholders})",
+        candidate_urls
     )
 
     fetched = {row[0]: (row[1], row[2]) for row in cursor.fetchall()}
@@ -971,7 +977,7 @@ def search_faculty_by_research_topic(question, memory=None):
     conn.close()
 
     # Preserve Chroma's relevance ordering rather than SQL's row order.
-    rows = [fetched[fid] for fid in candidate_ids if fid in fetched]
+    rows = [fetched[u] for u in candidate_urls if u in fetched]
 
     if not rows:
         return None
