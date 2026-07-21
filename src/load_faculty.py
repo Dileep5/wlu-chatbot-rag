@@ -12,6 +12,50 @@ HEADERS = {
     )
 }
 
+# Only a letter-group directly adjacent to digits can match - this is
+# what a broader pattern (allowing a second optional letter-group
+# separated by whitespace) got wrong during investigation: it let an
+# unrelated stray token ("II") get absorbed into an adjacent real code
+# ("HS206") as if it were one match. Cross-listed codes ("CP/PC400") are
+# still supported, but only when joined by a literal "/".
+_COURSE_CODE_PATTERN = re.compile(
+    r"\b([A-Z]{2,4}(?:/[A-Z]{2,4})?)\s?(\d{3})([A-Z]?)\b"
+)
+
+
+def _extract_courses_taught_codes(text):
+
+    # Cross-listed codes ("CP/PC400") are split into their two individual,
+    # separately-registerable codes ("CP400", "PC400") rather than kept
+    # as one joined string - course_code needs to be atomic to match
+    # courses.db and to answer "who taught CP400" / "who taught PC400"
+    # symmetrically. Deduplicated per-profile here (not left to the
+    # table's UNIQUE constraint) so a code mentioned twice on one page
+    # (e.g. once under "will teach", once under "recent courses") doesn't
+    # depend on insert-order/ignore behavior to collapse correctly.
+    codes = []
+    seen = set()
+
+    for match in _COURSE_CODE_PATTERN.finditer(text):
+
+        prefix, digits, suffix = match.groups()
+
+        if "/" in prefix:
+            first, second = prefix.split("/", 1)
+            normalized_list = [first + digits + suffix, second + digits + suffix]
+        else:
+            normalized_list = [prefix + digits + suffix]
+
+        for normalized in normalized_list:
+
+            normalized = normalized.upper().replace(" ", "")
+
+            if normalized not in seen:
+                seen.add(normalized)
+                codes.append(normalized)
+
+    return codes
+
 
 def _extract_name(soup, member_name):
 
@@ -112,6 +156,18 @@ def load_faculty(faculty_links_csv):
     cursor = conn.cursor()
 
     cursor.execute("DELETE FROM faculty")
+    cursor.execute("DELETE FROM faculty_courses_taught")
+
+    # Loaded once (not per-profile) purely to set the in_courses_db flag -
+    # courses.db is a separate database file, so this is a plain Python
+    # set lookup rather than a cross-database SQL join.
+    courses_conn = sqlite3.connect("data/courses.db")
+    courses_cursor = courses_conn.cursor()
+    courses_cursor.execute("SELECT course_code FROM courses")
+    known_course_codes = {
+        row[0].upper().replace(" ", "") for row in courses_cursor.fetchall()
+    }
+    courses_conn.close()
 
     with open(faculty_links_csv, newline="", encoding="utf-8") as file:
 
@@ -147,6 +203,16 @@ def load_faculty(faculty_links_csv):
 
                 biography = _extract_accordion_section(
                     soup, ["biography"]
+                )
+
+                # Exact heading match, not a loose "course"/"teaching"
+                # keyword - investigation found a differently-headed
+                # section ("Anecdotal Thoughts on Teaching at Laurier")
+                # that's personal teaching-philosophy prose with no course
+                # codes at all, which a looser keyword would have wrongly
+                # matched.
+                courses_taught_text = _extract_accordion_section(
+                    soup, ["courses taught"]
                 )
 
                 # email/phone/office aren't part of the accordion sections,
@@ -198,6 +264,30 @@ def load_faculty(faculty_links_csv):
                 ))
 
                 print("Inserted")
+
+                if courses_taught_text:
+
+                    for course_code in _extract_courses_taught_codes(
+                        courses_taught_text
+                    ):
+
+                        cursor.execute("""
+                        INSERT OR IGNORE INTO faculty_courses_taught
+                        (
+                            faculty_source_url,
+                            course_code,
+                            raw_text,
+                            term_label,
+                            in_courses_db
+                        )
+                        VALUES (?, ?, ?, ?, ?)
+                        """, (
+                            profile_url,
+                            course_code,
+                            courses_taught_text,
+                            None,
+                            1 if course_code in known_course_codes else 0
+                        ))
 
             except Exception as e:
 

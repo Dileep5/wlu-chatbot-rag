@@ -94,6 +94,12 @@ def _table_exists(db_path, table_name):
 # "no such table" and breaking every query that reaches structured_search.
 FACULTY_DB_READY = _table_exists("data/faculty.db", "faculty")
 
+# faculty_courses_taught is a separate, newer table - may not exist yet
+# in every environment even when faculty.db itself is ready.
+FACULTY_COURSES_TAUGHT_READY = _table_exists(
+    "data/faculty.db", "faculty_courses_taught"
+)
+
 
 def search_course(question, memory=None):
 
@@ -136,6 +142,133 @@ def search_course(question, memory=None):
         memory["last_course"] = course_code
 
     return result
+
+
+# Deterministic "who has taught" intent detector - deliberately scoped to
+# the "taught" tense only (not "who teaches"), which is already claimed
+# by the department-list detector below for a different meaning ("who
+# teaches in Marketing"). Kept as its own narrow trigger so the two never
+# collide.
+_TAUGHT_INTENT_PATTERN = re.compile(
+    r"\bwho\s+(?:has\s+)?taught\s+(.+)", re.IGNORECASE
+)
+
+
+def _extract_taught_query(question):
+
+    match = _TAUGHT_INTENT_PATTERN.search(question)
+
+    if not match:
+        return None
+
+    captured = match.group(1).strip().rstrip("?.!, ")
+
+    return captured or None
+
+
+def search_faculty_courses_taught(question, memory=None):
+
+    if not FACULTY_COURSES_TAUGHT_READY:
+        return None
+
+    captured = _extract_taught_query(question)
+
+    if not captured:
+        return None
+
+    # This query has clearly been recognized as a "who has taught" intent
+    # from here on - every path below returns a real answer (including
+    # graceful "not found" text) rather than None, so it can never fall
+    # through to the general vector fallback and risk an ungrounded
+    # answer for a course-specific question.
+
+    code_match = re.search(r"\b[A-Z]{2,4}\d{3}[A-Z]?\b", captured.upper())
+
+    if code_match:
+        course_code = code_match.group()
+        label = course_code
+
+    else:
+        # No bare course code in the question - resolve a plain-English
+        # course name (e.g. "Operating Systems") against courses.db first.
+        conn = sqlite3.connect("data/courses.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT course_code, course_name FROM courses")
+        course_rows = cursor.fetchall()
+        conn.close()
+
+        captured_lower = captured.lower()
+
+        # Tier 1: exact name match. Tier 2: fallback substring match.
+        course_code = None
+        matched_name = None
+
+        for code, course_name in course_rows:
+            if course_name and course_name.strip().lower() == captured_lower:
+                course_code, matched_name = code, course_name
+                break
+
+        if not course_code:
+            for code, course_name in course_rows:
+                if course_name and captured_lower in course_name.lower():
+                    course_code, matched_name = code, course_name
+                    break
+
+        if not course_code:
+            return (
+                f'No course matching "{captured}" was found in the '
+                f"course catalog.",
+                None
+            )
+
+        label = f"{matched_name} ({course_code})"
+
+    normalized_code = course_code.upper().replace(" ", "")
+
+    conn = sqlite3.connect("data/faculty.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT DISTINCT faculty_source_url FROM faculty_courses_taught "
+        "WHERE course_code = ?",
+        (normalized_code,)
+    )
+
+    source_urls = [row[0] for row in cursor.fetchall()]
+
+    if not source_urls:
+        conn.close()
+        return (
+            f"No faculty-taught record was found for {label}. This "
+            f"reflects faculty profiles' self-reported teaching history, "
+            f"which isn't available for every course or instructor.",
+            None
+        )
+
+    placeholders = ",".join("?" * len(source_urls))
+
+    cursor.execute(
+        f"SELECT DISTINCT name, title FROM faculty "
+        f"WHERE source_url IN ({placeholders})",
+        source_urls
+    )
+
+    rows = cursor.fetchall()
+
+    conn.close()
+
+    if not rows:
+        return (
+            f"No faculty-taught record was found for {label}.",
+            None
+        )
+
+    return (
+        _format_faculty_list_context(
+            "Faculty who have taught this course", label, rows
+        ),
+        None
+    )
 
 
 # Generic normalization rules for program-name substring matching.
@@ -912,6 +1045,19 @@ def structured_search(question, memory=None):
 
         elif memory.get("last_faculty"):
             question = memory["last_faculty"]
+
+    # FACULTY COURSES TAUGHT
+    # Must run before the plain COURSE lookup below: "Who has taught
+    # CP104?" contains a bare course code that search_course() would
+    # otherwise match first, returning the course description instead of
+    # answering who taught it. Bare "What is CP104?" has no "who has
+    # taught" trigger, so it's unaffected and still reaches search_course
+    # exactly as before.
+
+    taught_result = search_faculty_courses_taught(question, memory)
+
+    if taught_result:
+        return taught_result
 
     # COURSE
 

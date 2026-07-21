@@ -235,6 +235,55 @@ FACULTY_RETRIEVAL_TESTS = [
     ),
 ]
 
+FACULTY_COURSES_TAUGHT_TESTS = [
+    TestCase(
+        name="Who has taught a course code (CP104)",
+        turns=["Who has taught CP104?"],
+        check=lambda resp, at: (
+            contains_any(resp, "CP104")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Faculty Courses Taught",
+    ),
+    TestCase(
+        name="Who has taught a course name (Operating Systems)",
+        turns=["Who has taught Operating Systems?"],
+        check=lambda resp, at: (
+            contains_any(resp, "Operating Systems", "CP386")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Faculty Courses Taught",
+    ),
+    TestCase(
+        name="Bare course-code lookup still works unchanged",
+        turns=["What is CP104?"],
+        check=lambda resp, at: (
+            contains_any(resp, "CP104")
+            and "has been taught by" not in resp.lower()
+            and "have taught" not in resp.lower()
+        ),
+        category="Faculty Courses Taught",
+    ),
+    TestCase(
+        name="Graceful no-record response for an unknown course code",
+        turns=["Who has taught CP999?"],
+        check=lambda resp, at: (
+            is_non_empty_response(resp)
+            and not is_off_topic_decline(resp)
+        ),
+        category="Faculty Courses Taught",
+    ),
+    TestCase(
+        name="Graceful no-match response for an unknown course name",
+        turns=["Who has taught Advanced Underwater Basket Weaving?"],
+        check=lambda resp, at: (
+            is_non_empty_response(resp)
+            and not is_off_topic_decline(resp)
+        ),
+        category="Faculty Courses Taught",
+    ),
+]
+
 OUT_OF_DOMAIN_TESTS = [
     TestCase(
         name="Sports question",
@@ -281,6 +330,7 @@ CATEGORIES = [
     ("Program Aliases", "Aliases", PROGRAM_ALIAS_TESTS),
     ("Program Comparison", "Comparison", PROGRAM_COMPARISON_TESTS),
     ("Faculty Retrieval", "Faculty", FACULTY_RETRIEVAL_TESTS),
+    ("Faculty Courses Taught", "Courses Taught", FACULTY_COURSES_TAUGHT_TESTS),
     ("Out-of-Domain Detection", "Out-of-Domain", OUT_OF_DOMAIN_TESTS),
 ]
 
