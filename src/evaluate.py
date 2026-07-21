@@ -323,6 +323,58 @@ FACULTY_COURSES_TAUGHT_TESTS = [
     ),
 ]
 
+# Real, verified data (see comments) - not hypothetical. Kaiyu Li's
+# actual "Courses Taught" data includes CP600 (Practical Algorithm
+# Design) and CP612 (Data Management and Analysis); Emad Mohammed's
+# includes CP468 (Artificial Intelligence).
+PERSON_TOPIC_COURSES_TAUGHT_TESTS = [
+    TestCase(
+        name="Literal topic match (algorithm -> CP600)",
+        turns=["Has Kaiyu Li taught algorithm courses?"],
+        check=lambda resp, at: (
+            contains_any(resp, "CP600", "Algorithm")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Person + Topic Courses Taught",
+    ),
+    TestCase(
+        name="Synonym match (AI -> Artificial Intelligence via alias)",
+        turns=["Has Emad Mohammed taught any AI courses?"],
+        check=lambda resp, at: (
+            contains_any(resp, "CP468", "Artificial Intelligence")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Person + Topic Courses Taught",
+    ),
+    TestCase(
+        name="No topical match for a resolved person with real course history",
+        turns=["Has Kaiyu Li taught networking courses?"],
+        check=lambda resp, at: (
+            is_non_empty_response(resp)
+            and not is_off_topic_decline(resp)
+        ),
+        category="Person + Topic Courses Taught",
+    ),
+    TestCase(
+        name="No course-history available for a resolved person",
+        turns=["Has Shohini Ghose taught any AI courses?"],
+        check=lambda resp, at: (
+            is_non_empty_response(resp)
+            and not is_off_topic_decline(resp)
+        ),
+        category="Person + Topic Courses Taught",
+    ),
+    TestCase(
+        name="Unknown/unresolvable faculty member",
+        turns=["Has John Q Nonexistentperson taught database courses?"],
+        check=lambda resp, at: (
+            is_non_empty_response(resp)
+            and not is_off_topic_decline(resp)
+        ),
+        category="Person + Topic Courses Taught",
+    ),
+]
+
 OUT_OF_DOMAIN_TESTS = [
     TestCase(
         name="Sports question",
@@ -371,6 +423,7 @@ CATEGORIES = [
     ("Faculty Retrieval", "Faculty", FACULTY_RETRIEVAL_TESTS),
     ("Research Topic", "Research Topic", RESEARCH_TOPIC_TESTS),
     ("Faculty Courses Taught", "Courses Taught", FACULTY_COURSES_TAUGHT_TESTS),
+    ("Person + Topic Courses Taught", "Person+Topic", PERSON_TOPIC_COURSES_TAUGHT_TESTS),
     ("Out-of-Domain Detection", "Out-of-Domain", OUT_OF_DOMAIN_TESTS),
 ]
 

@@ -271,6 +271,220 @@ def search_faculty_courses_taught(question, memory=None):
     )
 
 
+# Configurable topic-alias dictionary for person+topic course-taught
+# queries (e.g. "Has X taught any AI courses?"). Fully deterministic -
+# no embeddings anywhere in this feature. Each key is a natural-language
+# topic phrase; each value is the list of phrases treated as equivalent
+# when matching against course names. This is what lets a topic like
+# "ai" match a course literally named "Artificial Intelligence" (no
+# word overlap at all otherwise) without a semantic model - the
+# tradeoff is that recall is capped by what's been added here. Keep
+# alias entries as whole, specific phrases, never a single common short
+# word - that's exactly the kind of entry that caused the department-
+# name/conversation-detection false positives fixed earlier in this
+# project.
+_TOPIC_SYNONYMS = {
+    "ai": ["ai", "artificial intelligence"],
+    "machine learning": ["machine learning", "ml"],
+    "database": ["database", "databases", "data management"],
+}
+
+
+def _topic_words(phrase):
+
+    return frozenset(re.findall(r"[a-z]+", phrase.lower()))
+
+
+# Built once from _TOPIC_SYNONYMS so the dictionary itself can stay in
+# natural, human-editable phrasing (keys/aliases as plain strings) while
+# lookups are order-insensitive (word-set based, not exact-string based).
+_TOPIC_SYNONYMS_BY_WORDS = {
+    _topic_words(key): aliases
+    for key, aliases in _TOPIC_SYNONYMS.items()
+}
+
+
+def _expand_topic_aliases(topic):
+
+    aliases = _TOPIC_SYNONYMS_BY_WORDS.get(_topic_words(topic))
+
+    return aliases if aliases else [topic]
+
+
+def _course_name_matches_alias(course_name, alias_phrase):
+
+    course_words = _topic_words(course_name)
+    alias_words = _topic_words(alias_phrase)
+
+    # Containment, not equality - the reverse of the faculty/department
+    # name-matching rule. There, an extra query word had to disqualify a
+    # match (so "Faculty of Science" didn't swallow "Computer Science").
+    # Here the course name is the longer, more descriptive side, so
+    # requiring every alias word to appear somewhere in it (not the
+    # other way around) is the correct direction, while still requiring
+    # ALL of the alias's words - not just one - to rule out the same
+    # single-short-word collision class fixed elsewhere in this project.
+    return bool(alias_words) and alias_words.issubset(course_words)
+
+
+# Deterministic "person + topic courses taught" intent detection. Two
+# patterns cover the two orderings seen in practice ("Has X taught any
+# Y courses?" and "What Y courses has X taught?"); anything else falls
+# through unmatched rather than being guessed at. Both require the
+# literal words "taught" and "course(s)" together, which is why this
+# never collides with the plain "who has taught <code/name>" detector
+# above (that one requires "who", which neither pattern here does) or
+# the "who researches <topic>" detector (which never mentions "taught").
+_PERSON_TAUGHT_TOPIC_PATTERN = re.compile(
+    r"\bhas\s+.+?\s+taught\s+(?:any\s+)?(.+?)\s*courses?\b", re.IGNORECASE
+)
+_TOPIC_TAUGHT_PERSON_PATTERN = re.compile(
+    r"\bwhat\s+(.+?)\s*courses?\s+has\s+.+?\s+taught\b", re.IGNORECASE
+)
+
+
+def _extract_person_topic_query(question):
+
+    match = (
+        _PERSON_TAUGHT_TOPIC_PATTERN.search(question)
+        or _TOPIC_TAUGHT_PERSON_PATTERN.search(question)
+    )
+
+    if not match:
+        return None
+
+    topic = match.group(1).strip().rstrip("?.!, ")
+
+    return topic or None
+
+
+def search_faculty_courses_by_topic(question, memory=None):
+
+    if not FACULTY_COURSES_TAUGHT_READY:
+        return None
+
+    topic = _extract_person_topic_query(question)
+
+    if not topic:
+        return None
+
+    # Person resolution reuses the existing, already-proven name-matching
+    # tiers rather than trying to isolate an exact "person phrase" from
+    # the regex capture - that matching already handles credential
+    # suffixes and surrounding text robustly and shouldn't be duplicated.
+    person_row = search_faculty(question, memory)
+
+    if not person_row:
+        return (
+            "I couldn't identify a specific faculty member in that "
+            "question.",
+            None
+        )
+
+    person_name = person_row[0]
+    person_source_url = person_row[9]
+
+    conn = sqlite3.connect("data/faculty.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT course_code FROM faculty_courses_taught "
+        "WHERE faculty_source_url = ?",
+        (person_source_url,)
+    )
+
+    codes = [row[0] for row in cursor.fetchall()]
+
+    conn.close()
+
+    if not codes:
+        return (
+            f"No course-taught information is available for "
+            f"{person_name}.",
+            None
+        )
+
+    conn = sqlite3.connect("data/courses.db")
+    cursor = conn.cursor()
+
+    placeholders = ",".join("?" * len(codes))
+
+    cursor.execute(
+        f"SELECT course_code, course_name FROM courses "
+        f"WHERE course_code IN ({placeholders})",
+        codes
+    )
+
+    course_rows = cursor.fetchall()
+
+    conn.close()
+
+    aliases = _expand_topic_aliases(topic)
+    topic_words = _topic_words(topic)
+
+    tier1 = []
+    tier2 = []
+    seen_codes = set()
+
+    for code, course_name in course_rows:
+
+        if not course_name or code in seen_codes:
+            continue
+
+        # Tier 1: the literal topic phrase, as typed, matches.
+        if _course_name_matches_alias(course_name, topic):
+            tier1.append((code, course_name, None))
+            seen_codes.add(code)
+            continue
+
+        # Tier 2: only a dictionary alias (not the literal phrase)
+        # matches.
+        for alias in aliases:
+
+            if _topic_words(alias) == topic_words:
+                continue
+
+            if _course_name_matches_alias(course_name, alias):
+                tier2.append((code, course_name, alias))
+                seen_codes.add(code)
+                break
+
+    # Deterministic ranking: literal matches before synonym matches, no
+    # scores involved - just course_code as a fixed, content-independent
+    # tiebreaker within each tier.
+    tier1.sort(key=lambda row: row[0])
+    tier2.sort(key=lambda row: row[0])
+
+    matches = tier1 + tier2
+
+    if not matches:
+        return (
+            f'{person_name} has taught courses, but none found related '
+            f'to "{topic}".',
+            None
+        )
+
+    lines = []
+
+    for code, course_name, alias in matches:
+
+        if alias:
+            lines.append(f'- {code} - {course_name} (matched via "{alias}")')
+        else:
+            lines.append(f"- {code} - {course_name}")
+
+    course_lines = "\n".join(lines)
+
+    context = f"""
+Faculty member: {person_name}
+
+Courses taught related to "{topic}":
+{course_lines}
+"""
+
+    return context, None
+
+
 # Generic normalization rules for program-name substring matching.
 # "Honours"/"Program"/"Degree" are pure qualifiers and are stripped
 # entirely. Degree-type phrases ("Bachelor of", "Master of", ...) are
@@ -1064,6 +1278,18 @@ def structured_search(question, memory=None):
 
     if taught_result:
         return taught_result
+
+    # FACULTY COURSES TAUGHT - PERSON + TOPIC
+    # Must also run before the plain single-person FACULTY lookup further
+    # below: "Has Kaiyu Li taught database courses?" contains a full
+    # name that search_faculty()'s own tiered matching would otherwise
+    # match directly, returning a generic profile instead of answering
+    # the actual question.
+
+    person_topic_result = search_faculty_courses_by_topic(question, memory)
+
+    if person_topic_result:
+        return person_topic_result
 
     # COURSE
 
