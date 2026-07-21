@@ -17,6 +17,20 @@ collection = client.get_collection(
     "wlu_chatbot_chunks"
 )
 
+# The faculty-research collection is built by the separate
+# build_faculty_vector_db.py pipeline (Sprint 4C1) and may not exist yet
+# in every environment - detected once, the same way FACULTY_DB_READY
+# guards faculty.db access, so its absence degrades gracefully instead of
+# raising.
+try:
+    faculty_research_collection = client.get_collection(
+        "wlu_faculty_research"
+    )
+    FACULTY_RESEARCH_READY = True
+except Exception:
+    faculty_research_collection = None
+    FACULTY_RESEARCH_READY = False
+
 FOLLOWUP_PHRASES = [
     "tell me more",
     "more",
@@ -709,6 +723,129 @@ def search_faculty(question, memory=None):
     return None
 
 
+# Deterministic research-topic intent detection - same style as the
+# department-list/coordinator detectors above, but this one also extracts
+# the topic text itself (the capture group), since there's no fixed list
+# of known values to match against the way there is for departments or
+# faculties. No LLM classification is used anywhere in this function.
+_RESEARCH_INTENT_PATTERNS = [
+    re.compile(
+        r"who\s+(?:researches|studies|works on|specializes in|"
+        r"is interested in|does research (?:on|in))\s+(.+)",
+        re.IGNORECASE
+    ),
+    re.compile(r"research(?:ers?)?\s+(?:on|in|about)\s+(.+)", re.IGNORECASE),
+    re.compile(
+        r"i want to (?:study|research|learn about)\s+(.+)", re.IGNORECASE
+    ),
+    re.compile(r"(?:expertise|specialization)\s+(?:in|on)\s+(.+)", re.IGNORECASE),
+]
+
+# Trailing institution phrases stripped from the captured topic text so
+# "who researches AI at Laurier?" resolves to just "AI".
+_RESEARCH_TOPIC_TRAILING_PHRASES = (
+    "at wilfrid laurier university", "at laurier", "at wlu", "here",
+)
+
+# Chosen from real distance data gathered against the faculty-research
+# collection across several representative topics (quantum computing,
+# machine learning, consumer behavior, artificial intelligence, AI) -
+# genuine topical matches consistently land below ~1.0, while the tail
+# beyond that mixes in progressively weaker/unrelated matches. Kept as a
+# named constant since it's a calibrated value, not an arbitrary one.
+_RESEARCH_TOPIC_DISTANCE_THRESHOLD = 1.0
+
+
+def _extract_research_topic(question):
+
+    for pattern in _RESEARCH_INTENT_PATTERNS:
+
+        match = pattern.search(question)
+
+        if not match:
+            continue
+
+        topic = match.group(1).strip().rstrip("?.!, ")
+        topic_lower = topic.lower()
+
+        for phrase in _RESEARCH_TOPIC_TRAILING_PHRASES:
+            if topic_lower.endswith(phrase):
+                topic = topic[:len(topic) - len(phrase)].strip()
+                break
+
+        topic = topic.rstrip("?.!, ")
+
+        if len(topic) >= 2:
+            return topic
+
+    return None
+
+
+def search_faculty_by_research_topic(question, memory=None):
+
+    if not FACULTY_RESEARCH_READY:
+        return None
+
+    topic = _extract_research_topic(question)
+
+    if not topic:
+        return None
+
+    # Phrased to match the corpus's own first-person research-statement
+    # style ("I am interested in...", "My research focuses on...") rather
+    # than embedding the bare noun phrase - verified against real data to
+    # noticeably tighten distances and improve ranking quality.
+    query_text = f"research interests in {topic}"
+
+    embedding = model.encode(query_text).tolist()
+
+    results = faculty_research_collection.query(
+        query_embeddings=[embedding],
+        n_results=10,
+        include=["metadatas", "distances"]
+    )
+
+    # Structured retrieval results first (ids + distances) - the
+    # similarity threshold is applied here, before any SQLite access.
+    candidate_ids = [
+        meta["id"]
+        for meta, distance in zip(
+            results["metadatas"][0], results["distances"][0]
+        )
+        if distance <= _RESEARCH_TOPIC_DISTANCE_THRESHOLD
+    ]
+
+    if not candidate_ids:
+        return None
+
+    # Re-fetch the authoritative rows from SQLite - Chroma only ever
+    # decided *which* ids are relevant, never what to display for them.
+    conn = sqlite3.connect(
+        "data/faculty.db"
+    )
+
+    cursor = conn.cursor()
+
+    placeholders = ",".join("?" * len(candidate_ids))
+
+    cursor.execute(
+        f"SELECT id, name, title FROM faculty WHERE id IN ({placeholders})",
+        candidate_ids
+    )
+
+    fetched = {row[0]: (row[1], row[2]) for row in cursor.fetchall()}
+
+    conn.close()
+
+    # Preserve Chroma's relevance ordering rather than SQL's row order.
+    rows = [fetched[fid] for fid in candidate_ids if fid in fetched]
+
+    if not rows:
+        return None
+
+    return topic, rows
+
+
 def search_vector(question):
 
     embedding = model.encode(
@@ -902,6 +1039,23 @@ Research Interests:
 """
 
         return context, result[9]
+
+    # RESEARCH TOPIC
+    # Tried last, after every exact/structured lookup above (course,
+    # program, coordinator, faculty-level list, department-level list,
+    # department, single-person) - this is the least specific signal in
+    # the cascade and must never preempt any of those.
+
+    research_topic_result = search_faculty_by_research_topic(question, memory)
+
+    if research_topic_result:
+
+        topic, faculty_rows = research_topic_result
+
+        return (
+            _format_faculty_list_context("Research Topic", topic, faculty_rows),
+            None
+        )
 
     return None
 
