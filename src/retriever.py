@@ -675,6 +675,40 @@ def _get_department_coordinator(program_source_url):
     return None
 
 
+# Single-word department names collide with ordinary English words used
+# completely outside any WLU context - "English", "History", "Music",
+# "Philosophy", "Psychology", "Biology", "Business", "Economics",
+# "Education", "Sociology" are all real departments.db entries that are
+# also common words ("Do you speak English?", "I love music."). A bare
+# word-boundary match on the name alone isn't enough evidence the user
+# means the academic department, so single-word names additionally
+# require one of these academic-context signals to be present. Multi-
+# word department names ("Physics and Computer Science") are already
+# specific enough that a whole-phrase match alone is safe - this gate
+# only applies to the single-word case.
+_DEPARTMENT_ACADEMIC_SIGNAL_PATTERN = re.compile(
+    r"\b(?:department|faculty\s+of|program|major|minor|degree|"
+    r"at\s+laurier|at\s+wlu|at\s+wilfrid\s+laurier)\b",
+    re.IGNORECASE
+)
+
+
+def _department_name_matches(department_name, question_lower):
+
+    # Whole-word/whole-phrase match, not substring containment - this is
+    # what stops a name like "Art" from matching inside an unrelated word,
+    # on top of the academic-signal gate below.
+    if not re.search(
+        rf"\b{re.escape(department_name.lower())}\b", question_lower
+    ):
+        return False
+
+    if " " in department_name.strip():
+        return True
+
+    return bool(_DEPARTMENT_ACADEMIC_SIGNAL_PATTERN.search(question_lower))
+
+
 def search_department(question, memory=None):
 
     conn = sqlite3.connect(
@@ -699,11 +733,11 @@ def search_department(question, memory=None):
 
     conn.close()
 
-    question = question.lower()
+    question_lower = question.lower()
 
     for row in rows:
 
-        if row[0].lower() in question:
+        if _department_name_matches(row[0], question_lower):
 
             if memory is not None:
                 memory["last_department"] = row[0]

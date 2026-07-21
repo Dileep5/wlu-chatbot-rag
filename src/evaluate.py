@@ -375,6 +375,75 @@ PERSON_TOPIC_COURSES_TAUGHT_TESTS = [
     ),
 ]
 
+DEPARTMENT_FALSE_POSITIVE_TESTS = [
+    TestCase(
+        name="Coffee history is not the History department",
+        turns=["Tell me about the history of coffee."],
+        check=lambda resp, at: is_off_topic_decline(resp),
+        category="Department False-Positive Prevention",
+    ),
+    TestCase(
+        name="Speaking English is not the English department",
+        turns=["Do you speak English?"],
+        check=lambda resp, at: is_off_topic_decline(resp),
+        category="Department False-Positive Prevention",
+    ),
+    TestCase(
+        name="General philosophy is not the Philosophy department",
+        turns=["What is the philosophy behind this decision?"],
+        check=lambda resp, at: is_off_topic_decline(resp),
+        category="Department False-Positive Prevention",
+    ),
+    TestCase(
+        name="Loving music is not the Music department",
+        turns=["I love music."],
+        check=lambda resp, at: is_off_topic_decline(resp),
+        category="Department False-Positive Prevention",
+    ),
+    TestCase(
+        name="Common-sense psychology is not the Psychology department",
+        turns=["This is just common sense psychology."],
+        check=lambda resp, at: is_off_topic_decline(resp),
+        category="Department False-Positive Prevention",
+    ),
+    TestCase(
+        name="'History department' still resolves correctly",
+        turns=["Tell me about the History department"],
+        check=lambda resp, at: (
+            contains_any(resp, "History")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Department False-Positive Prevention",
+    ),
+    TestCase(
+        name="'X at Laurier' phrasing still resolves correctly",
+        turns=["History at Laurier"],
+        check=lambda resp, at: (
+            contains_any(resp, "History")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Department False-Positive Prevention",
+    ),
+    TestCase(
+        name="'X program' phrasing still resolves correctly",
+        turns=["English program"],
+        check=lambda resp, at: (
+            contains_any(resp, "English")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Department False-Positive Prevention",
+    ),
+    TestCase(
+        name="'Faculty of X' phrasing still resolves correctly",
+        turns=["Faculty of Music"],
+        check=lambda resp, at: (
+            contains_any(resp, "Music")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Department False-Positive Prevention",
+    ),
+]
+
 OUT_OF_DOMAIN_TESTS = [
     TestCase(
         name="Sports question",
@@ -424,6 +493,7 @@ CATEGORIES = [
     ("Research Topic", "Research Topic", RESEARCH_TOPIC_TESTS),
     ("Faculty Courses Taught", "Courses Taught", FACULTY_COURSES_TAUGHT_TESTS),
     ("Person + Topic Courses Taught", "Person+Topic", PERSON_TOPIC_COURSES_TAUGHT_TESTS),
+    ("Department False-Positive Prevention", "Dept False-Positive", DEPARTMENT_FALSE_POSITIVE_TESTS),
     ("Out-of-Domain Detection", "Out-of-Domain", OUT_OF_DOMAIN_TESTS),
 ]
 
