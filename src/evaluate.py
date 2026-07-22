@@ -610,6 +610,59 @@ COORDINATOR_LOOKUP_TESTS = [
     ),
 ]
 
+# Protects: direct department coordinator lookup (Sprint 10E), via the
+# full chatbot. Pass criteria: a department with real coordinator data
+# names the actual coordinator; a department with none declines
+# gracefully; a nonexistent department is never fabricated; a follow-up
+# question resolves the department's coordinator through entity-history,
+# without needing to repeat the department's name.
+DEPARTMENT_COORDINATOR_TESTS = [
+    TestCase(
+        name="History department coordinator - real data present",
+        turns=["Who coordinates the History department?"],
+        check=lambda resp, at: (
+            contains_any(resp, "Susan Neylan")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Department Coordinator",
+    ),
+    TestCase(
+        name="Single-word department name - who is the coordinator of Biology?",
+        turns=["Who is the coordinator of Biology?"],
+        check=lambda resp, at: (
+            contains_any(resp, "Jonathan Wilson")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Department Coordinator",
+    ),
+    TestCase(
+        name="Department without coordinator data - graceful fallback",
+        turns=["Who coordinates the Archaeology and Heritage Studies department?"],
+        check=lambda resp, at: is_graceful_fallback(resp),
+        category="Department Coordinator",
+        metric="unsupported",
+    ),
+    TestCase(
+        name="Unsupported/nonexistent department - no fabrication",
+        turns=["Who coordinates the Underwater Basketweaving department?"],
+        check=lambda resp, at: is_graceful_fallback(resp),
+        category="Department Coordinator",
+        metric="unsupported",
+    ),
+    TestCase(
+        name="Multi-turn: department coordinator follow-up via entity-history",
+        turns=[
+            "Tell me about the History department.",
+            "Who coordinates it?",
+        ],
+        check=lambda resp, at: (
+            contains_any(resp, "Susan Neylan")
+            and not is_clarification_response(resp)
+        ),
+        category="Department Coordinator",
+    ),
+]
+
 # Protects: course prerequisite extraction and retrieval (Sprint 6F), via
 # the full chatbot. Pass criteria: a course with real prerequisites
 # states its actual required codes; a course with none says so plainly;
@@ -789,14 +842,27 @@ MULTI_TURN_CONVERSATION_TESTS = [
         category="Multi-Turn Conversations",
     ),
     TestCase(
-        name="Unsupported follow-up: department context has no coordinator-lookup path",
+        # This used to clarify: departments.db's `coordinator` column
+        # (already populated for Psychology - Jeffery Jones, PhD) was
+        # never exposed by any retrieval path, so "does it have a
+        # coordinator?" had nothing to resolve against. Sprint 10E adds
+        # direct department coordinator lookup, which closes exactly
+        # this gap - "it" (the Psychology department) now correctly
+        # resolves and grounds the answer in the real coordinator's
+        # name instead of clarifying. An intentional, expected behavior
+        # change, not a regression (same precedent as Sprint 9B's
+        # courses-taught write-back test update).
+        name="Follow-up: department coordinator now resolves via entity-history (Sprint 10E)",
         turns=[
             "Tell me about the Psychology department.",
             "Does it have a coordinator?",
         ],
-        check=lambda resp, at: is_clarification_response(resp),
+        check=lambda resp, at: (
+            contains_any(resp, "Jeffery Jones", "Jones")
+            and not is_clarification_response(resp)
+            and not is_off_topic_decline(resp)
+        ),
         category="Multi-Turn Conversations",
-        metric="clarification",
     ),
     TestCase(
         name="Ambiguity: 'compare those' is never resolvable regardless of context",
@@ -934,6 +1000,7 @@ CATEGORIES = [
     ("Person + Topic Courses Taught", "Person+Topic", PERSON_TOPIC_COURSES_TAUGHT_TESTS),
     ("Department False-Positive Prevention", "Dept False-Positive", DEPARTMENT_FALSE_POSITIVE_TESTS),
     ("Coordinator Lookup", "Coordinator", COORDINATOR_LOOKUP_TESTS),
+    ("Department Coordinator", "Dept Coordinator", DEPARTMENT_COORDINATOR_TESTS),
     ("Course Prerequisites", "Prerequisites", COURSE_PREREQUISITE_TESTS),
     ("Course Metadata", "Course Metadata", COURSE_METADATA_TESTS),
     ("Graduate Program Requirements", "Grad Program Reqs", GRADUATE_PROGRAM_REQUIREMENTS_TESTS),
@@ -957,6 +1024,7 @@ CAPABILITY_COVERAGE = [
     ("Courses-taught lookup (direct, by code/name)", "Faculty Courses Taught"),
     ("Person + topic courses-taught lookup", "Person + Topic Courses Taught"),
     ("Program coordinator lookup", "Coordinator Lookup"),
+    ("Department coordinator lookup (existing coordinator column, entity-history follow-up)", "Department Coordinator"),
     ("Course prerequisites (direct/reverse/relational)", "Course Prerequisites"),
     ("Course metadata exposure (corequisites/exclusions/location/notes)", "Course Metadata"),
     ("Graduate program requirements (direct/reverse/relational)", "Graduate Program Requirements"),
@@ -1510,6 +1578,141 @@ def _check_course_metadata_exposure():
     )
 
 
+# Protects: direct department coordinator lookup (Sprint 10E), reading
+# departments.db's existing `coordinator` column only - never inferred
+# from free-text description. Checked via direct structured_search()/
+# resolve_contextual_reference() calls (not AppTest) since the exact
+# presence/absence of the "Department Coordinator:" section and its
+# grounding data is what's being verified, not the LLM's paraphrase.
+def _check_department_coordinator():
+
+    sys.path.insert(0, str(SRC_DIR))
+    from retriever import structured_search, resolve_contextual_reference, create_memory
+
+    # Direct queries, departments known to have real coordinator data.
+    result = structured_search("Who coordinates the History department?", {})
+    text = result[0] if result else ""
+    yield (
+        "Department coordinator: History resolves to the real coordinator",
+        bool(result) and "Department Coordinator:" in text and "Susan Neylan" in text,
+        f"got {text[:150]!r}"
+    )
+
+    # Biology is a single-word department name with no other academic-
+    # signal word in this phrasing - specifically verifies the
+    # "coordinat*" signal-word addition (Sprint 10E) that makes this
+    # resolvable at all.
+    result = structured_search("Who is the coordinator of Biology?", {})
+    text = result[0] if result else ""
+    yield (
+        "Department coordinator: single-word department name (Biology) resolves correctly",
+        bool(result) and "Department Coordinator:" in text and "Jonathan Wilson" in text,
+        f"got {text[:150]!r}"
+    )
+
+    result = structured_search("Department coordinator for Economics", {})
+    text = result[0] if result else ""
+    yield (
+        "Department coordinator: Economics resolves to the real coordinator",
+        bool(result) and "Department Coordinator:" in text and "Christos Shiamptanis" in text,
+        f"got {text[:150]!r}"
+    )
+
+    # Department without coordinator data - graceful "not available",
+    # never a fabricated name.
+    result = structured_search(
+        "Who coordinates the Archaeology and Heritage Studies department?", {}
+    )
+    text = result[0] if result else ""
+    yield (
+        "Department coordinator: department without data gets a graceful fallback, not a fabrication",
+        bool(result) and "Coordinator information is not available." in text,
+        f"got {text[:150]!r}"
+    )
+
+    # Unsupported department - doesn't exist at all - must never
+    # fabricate a department or a coordinator for it.
+    result = structured_search(
+        "Who coordinates the Underwater Basketweaving department?", {}
+    )
+    yield (
+        "Department coordinator: nonexistent department produces no fabricated result",
+        result is None,
+        f"got {result!r}"
+    )
+
+    # Plain department query with no coordinator intent - must show no
+    # coordinator section at all (identical to pre-Sprint-10E output).
+    result = structured_search("Tell me about the History department", {})
+    text = result[0] if result else ""
+    yield (
+        "Department coordinator: plain department query omits the coordinator section entirely",
+        bool(result) and "Department Coordinator:" not in text,
+        f"got {text[:150]!r}"
+    )
+
+    # Multi-turn: "who coordinates it?" after establishing department
+    # context via entity-history, with no legacy-slot involvement.
+    mem = create_memory()
+    mem["turn_count"] = 1
+    structured_search("Tell me about the History department", mem)
+    mem["turn_count"] = 2
+    result = resolve_contextual_reference("Who coordinates it?", mem)
+    yield (
+        "Department coordinator: multi-turn 'who coordinates it?' resolves via entity-history",
+        bool(result) and result[0] == "resolved" and "Susan Neylan" in result[1],
+        f"got {result[0] if result else None!r}"
+    )
+
+    # Multi-turn: the task's own literal example ("tell me more about
+    # them") - no "coordinat" keyword at all, so this exercises the
+    # generic type-priority substitution path (with the "department"
+    # qualifier fix), not the dedicated coordinator rewrite.
+    mem = create_memory()
+    mem["turn_count"] = 1
+    structured_search("Tell me about the History department", mem)
+    mem["turn_count"] = 2
+    result = resolve_contextual_reference("Tell me more about them.", mem)
+    yield (
+        "Department coordinator: 'tell me more about them' still resolves the department (single-word name)",
+        bool(result) and result[0] == "resolved" and "History" in result[1],
+        f"got {result[0] if result else None!r}"
+    )
+
+    # Recency disambiguation: program established, then department -
+    # "who coordinates it?" must follow the department (more recent).
+    mem = create_memory()
+    mem["turn_count"] = 1
+    structured_search("What is the Master of Applied Computing program?", mem)
+    mem["turn_count"] = 2
+    structured_search("Tell me about the History department", mem)
+    mem["turn_count"] = 3
+    result = resolve_contextual_reference("Who coordinates it?", mem)
+    yield (
+        "Department coordinator: recency disambiguation follows the department when it's more recent",
+        bool(result) and result[0] == "resolved" and "Susan Neylan" in result[1],
+        f"got {result[0] if result else None!r}"
+    )
+
+    # Recency disambiguation, reversed - department established, then
+    # program - "who coordinates it?" must follow the program instead,
+    # confirming the existing program-coordinator capability still works
+    # unchanged through the new dynamic resolution.
+    mem = create_memory()
+    mem["turn_count"] = 1
+    structured_search("Tell me about the History department", mem)
+    mem["turn_count"] = 2
+    structured_search("What is the Master of Applied Computing program?", mem)
+    mem["turn_count"] = 3
+    result = resolve_contextual_reference("Who coordinates it?", mem)
+    yield (
+        "Department coordinator: recency disambiguation follows the program when it's more recent",
+        bool(result) and result[0] == "resolved"
+        and any(name in result[1] for name in ("Dariush Ebrahimi", "Usama Mir")),
+        f"got {result[0] if result else None!r}"
+    )
+
+
 def _check_contextual_reference_resolution():
 
     sys.path.insert(0, str(SRC_DIR))
@@ -1836,6 +2039,7 @@ def run_data_integrity_checks():
     checks += list(_check_email_extraction())
     checks += list(_check_course_prerequisites())
     checks += list(_check_course_metadata_exposure())
+    checks += list(_check_department_coordinator())
     checks += list(_check_image_link_rejection())
     checks += list(_check_beggar_recovered())
     checks += list(_check_contextual_reference_resolution())

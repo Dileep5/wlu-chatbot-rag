@@ -1512,8 +1512,12 @@ def _get_department_coordinator(program_source_url):
 # word department names ("Physics and Computer Science") are already
 # specific enough that a whole-phrase match alone is safe - this gate
 # only applies to the single-word case.
+# "coordinat*" (Sprint 10E) is included here too: "who is the
+# coordinator of Biology?" has no other academic-signal word at all, but
+# asking about an academic coordinator is itself never a coincidental,
+# non-WLU usage the way "history"/"music"/"english" commonly are.
 _DEPARTMENT_ACADEMIC_SIGNAL_PATTERN = re.compile(
-    r"\b(?:department|faculty\s+of|program|major|minor|degree|"
+    r"\b(?:department|faculty\s+of|program|major|minor|degree|coordinat\w*|"
     r"at\s+laurier|at\s+wlu|at\s+wilfrid\s+laurier)\b",
     re.IGNORECASE
 )
@@ -1541,6 +1545,14 @@ def search_department(question, memory=None):
         "data/departments.db"
     )
 
+    # Sprint 10E: `coordinator` is appended after the conditionally-
+    # present `level` column (same shape as courses.db in Sprint 10D) -
+    # sqlite3.Row keeps every existing positional access (result[0],
+    # result[3], ...) working unchanged while giving safe, unambiguous
+    # name-based access to `coordinator` regardless of whether `level`
+    # shifted its position.
+    conn.row_factory = sqlite3.Row
+
     cursor = conn.cursor()
 
     level_column = ", level" if DEPARTMENTS_HAVE_LEVEL else ""
@@ -1551,7 +1563,8 @@ def search_department(question, memory=None):
         programs,
         description,
         source_url
-        {level_column}
+        {level_column},
+        coordinator
     FROM departments
     """)
 
@@ -2126,16 +2139,24 @@ def _level_line(result, index):
     return f"Level: {result[index].capitalize()}\n"
 
 
-# _level_line(result, index) is shared with search_program()/
-# search_department(), which still return plain tuples with nothing
-# appended after their own conditional level column - its length-based
-# "wasn't queried" check is correct and unaffected for those two. The
-# COURSE row now always has 5 more columns appended after where `level`
-# conditionally sits, so that length check would never trigger there
-# even when level is genuinely absent, and reading a fixed index 6
-# would silently read prerequisites_text instead. sqlite3.Row's
-# name-based lookup sidesteps the whole positional-shift problem.
+# _level_line(result, index) is still shared with search_program(),
+# which returns a plain tuple with nothing appended after its own
+# conditional level column - its length-based "wasn't queried" check is
+# correct and unaffected there. Both COURSE (Sprint 10D) and DEPARTMENT
+# (Sprint 10E) rows now have more columns appended after where `level`
+# conditionally sits, so that length check would never trigger for them
+# even when level is genuinely absent, and reading a fixed index would
+# silently read the wrong column instead. sqlite3.Row's name-based
+# lookup sidesteps the whole positional-shift problem for both.
 def _course_level_line(result):
+
+    if "level" not in result.keys() or not result["level"]:
+        return ""
+
+    return f"Level: {result['level'].capitalize()}\n"
+
+
+def _department_level_line(result):
 
     if "level" not in result.keys() or not result["level"]:
         return ""
@@ -2321,9 +2342,18 @@ Program Requirements:
     # Tried before the department-level list check: these are a small,
     # fixed set of known institutional names matched deterministically by
     # exact word-set comparison against faculty_name, not the
-    # substring/residual matching department names use.
+    # substring/residual matching department names use. Skipped when
+    # coordinator intent is present (Sprint 10E): "who is the
+    # coordinator of X" incidentally matches this trigger's broad
+    # "who is" phrasing (_has_department_list_intent), but is asking
+    # about one specific role, not a list of people - left for the
+    # DEPARTMENT section below, which handles coordinator lookup
+    # directly.
 
-    faculty_level_result = search_faculty_by_faculty_name(question, memory)
+    faculty_level_result = (
+        None if _has_coordinator_intent(question_lower)
+        else search_faculty_by_faculty_name(question, memory)
+    )
 
     if faculty_level_result:
 
@@ -2338,9 +2368,13 @@ Program Requirements:
     # Must run before the single-department lookup below: both can match
     # on the same department name, but a "who works in X" / "list X
     # faculty" query wants the list of people, not the department's own
-    # generic description.
+    # generic description. Also skipped when coordinator intent is
+    # present, for the same reason as the faculty-level list above.
 
-    dept_list_result = search_faculty_by_department(question, memory)
+    dept_list_result = (
+        None if _has_coordinator_intent(question_lower)
+        else search_faculty_by_department(question, memory)
+    )
 
     if dept_list_result:
 
@@ -2359,13 +2393,29 @@ Program Requirements:
 
         context = f"""
 Department: {result[0]}
-{_level_line(result, 4)}
+{_department_level_line(result)}
 Programs:
 {result[1]}
 
 Description:
 {result[2]}
 """
+
+        # Department coordinator (Sprint 10E) - only added when
+        # specifically asked for, mirroring the PROGRAM coordinator
+        # pattern above exactly: reads the existing `coordinator` column
+        # directly, never inferred from the free-text description, and
+        # every other department query keeps producing exactly the
+        # context above, unchanged.
+        if _has_coordinator_intent(question_lower):
+
+            coordinator = result["coordinator"]
+
+            context += (
+                f"\nDepartment Coordinator:\n{coordinator.strip()}\n"
+                if coordinator and coordinator.strip() else
+                "\nDepartment Coordinator: Coordinator information is not available.\n"
+            )
 
         return context, result[3]
 
@@ -2511,11 +2561,72 @@ _GENERIC_CLARIFICATION_MESSAGE = (
 _INTENT_REWRITE_RULES = [
     (re.compile(r"\bprerequisites?\b", re.IGNORECASE), "course", "What are the prerequisites for {value}?"),
     (re.compile(r"\bteach(?:es|ing|er)?\b", re.IGNORECASE), "course", "Who has taught {value}?"),
-    (re.compile(r"\bcoordinat\w*\b", re.IGNORECASE), "program", "Who is the program coordinator for {value}?"),
 ]
+
+# "coordinat..." isn't a fixed-type rule like the two above: before
+# Sprint 10E, program coordinator lookup was the only kind that existed,
+# so "who coordinates it?" could safely always rewrite toward a program.
+# Now that department coordinator lookup also exists, that assumption
+# would silently misroute "who coordinates it?" after a department was
+# established (e.g. "Tell me about the History department" -> "Who
+# coordinates it?") toward a program clarification instead of answering
+# from department context. Resolved dynamically instead: whichever of
+# program/department was established MORE RECENTLY wins.
+_COORDINATOR_REWRITE_PATTERN = re.compile(r"\bcoordinat\w*\b", re.IGNORECASE)
+
+_COORDINATOR_REWRITE_TEMPLATES = {
+    "program": "Who is the program coordinator for {value}?",
+    # Deliberately phrased as a full sentence (not just the bare
+    # department name) - search_department()'s single-word academic-
+    # signal guard (Sprint 5C) requires an academic-context word
+    # alongside a single-word name like "History", which a bare name
+    # substitution would otherwise strip away.
+    "department": "Who coordinates the {value} department?",
+}
+
+
+def _resolve_coordinator_target(memory):
+
+    candidates = [
+        entry for entry in (
+            _latest_entity_of_type(memory, "program"),
+            _latest_entity_of_type(memory, "department"),
+        )
+        if entry
+    ]
+
+    if candidates:
+        candidates.sort(key=lambda e: e["turn_number"], reverse=True)
+        best = candidates[0]
+        return best["entity_type"], best["display_name"]
+
+    # No entity-history entry for either type - fall back to the legacy
+    # program slot only (department has no legacy slot to fall back to).
+    legacy_program = memory.get("last_program")
+
+    return ("program", legacy_program) if legacy_program else None
 
 
 def _attempt_contextual_resolution(question, pattern, type_priority, memory):
+
+    if _COORDINATOR_REWRITE_PATTERN.search(question):
+
+        target = _resolve_coordinator_target(memory)
+
+        if not target:
+            return ("clarify", _GENERIC_CLARIFICATION_MESSAGE)
+
+        entity_type, value = target
+
+        rewritten_question = _COORDINATOR_REWRITE_TEMPLATES[entity_type].format(value=value)
+
+        result = structured_search(rewritten_question, memory)
+
+        if result:
+            context, source = result
+            return ("resolved", context, source)
+
+        return ("clarify", _CLARIFICATION_MESSAGES[entity_type])
 
     for rule_pattern, rule_type, template in _INTENT_REWRITE_RULES:
 
@@ -2548,7 +2659,16 @@ def _attempt_contextual_resolution(question, pattern, type_priority, memory):
         # keyword above: substitutes only the matched marker, preserving
         # the rest of the sentence, so the result still has to actually
         # match an existing structured pattern to count as resolved.
-        substituted_question = pattern.sub(value, question, count=1)
+        # Department values get a "department" qualifier appended
+        # (Sprint 10E) for the same single-word academic-signal reason
+        # as the coordinator template above - "Tell me more about
+        # them." -> "Tell me more about History." would otherwise be
+        # indistinguishable from a non-WLU use of the word "History".
+        search_value = (
+            f"{value} department" if entity_type == "department" else value
+        )
+
+        substituted_question = pattern.sub(search_value, question, count=1)
 
         result = structured_search(substituted_question, memory)
 
