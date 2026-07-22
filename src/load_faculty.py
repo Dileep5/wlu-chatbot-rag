@@ -234,7 +234,15 @@ def load_faculty(faculty_links_csv):
                     print("Failed profile page")
                     continue
 
-                soup = BeautifulSoup(response.text, "html.parser")
+                # response.text decodes using requests' guessed encoding,
+                # which falls back to ISO-8859-1 whenever the server's
+                # Content-Type header omits a charset - confirmed root
+                # cause of the mojibake corruption in faculty names
+                # (e.g. "AngÃ¨le Foley" for "Angèle Foley", Sprint 10C).
+                # response.content is the raw bytes; BeautifulSoup's own
+                # encoding detection correctly identifies UTF-8 instead
+                # of inheriting requests' wrong guess.
+                soup = BeautifulSoup(response.content, "html.parser")
 
                 name = _extract_name(soup, member_name)
                 title = _extract_title(soup)

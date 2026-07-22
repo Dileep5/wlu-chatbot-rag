@@ -885,14 +885,42 @@ def search_program_course_requirements(question, memory=None):
     return None
 
 
-# Deterministic "who has taught" intent detector - deliberately scoped to
-# the "taught" tense only (not "who teaches"), which is already claimed
-# by the department-list detector below for a different meaning ("who
-# teaches in Marketing"). Kept as its own narrow trigger so the two never
-# collide.
+# Deterministic "who has taught" / "who teaches" intent detector -
+# accepts past tense ("who taught X", "who has taught X") and present
+# tense ("who teaches X") alike (Sprint 10C). Present-tense "teaches" is
+# excluded via negative lookahead when immediately followed by "in"/
+# "at"/"for" ("who teaches in Marketing?", "who teaches at the Business
+# school?") - that specific shape is already claimed by the department-
+# list detector below for a different meaning (a department/faculty
+# list, not a single course's instructor), and is never a genuine course
+# reference: no real course code or name is ever phrased as "in X"/
+# "at X"/"for X" directly after "teaches". Kept as its own trigger,
+# still never colliding with the department-list detector's "who
+# teaches in/at" phrasing.
 _TAUGHT_INTENT_PATTERN = re.compile(
-    r"\bwho\s+(?:has\s+)?taught\s+(.+)", re.IGNORECASE
+    r"\bwho\s+(?:has\s+taught|taught|teaches(?!\s+(?:in|at|for)\b))\s+(.+)",
+    re.IGNORECASE
 )
+
+
+# A bare pronoun/reference word captured on its own ("Who teaches it?",
+# "Who has taught that?") is never a genuine course reference - it's a
+# contextual follow-up meant for resolve_contextual_reference()'s memory-
+# based substitution, called later in app.py's routing only once
+# structured_search() has already returned None. Without this guard, the
+# captured word falls through to search_faculty_courses_taught()'s
+# course-name substring matching, which can wrongly match an unrelated
+# course whose name simply contains the pronoun as a substring (e.g.
+# "it" inside "Mobilities" - confirmed live, a Sprint 10C regression
+# caught during verification and fixed here rather than shipped). This
+# was always latently possible for "who taught it?" too (the "taught"
+# tense alone had the same gap); adding "teaches" support is what
+# actually exposed it via an existing test, so the guard is added for
+# every tense uniformly rather than narrowly for the new one.
+_BARE_REFERENCE_WORDS = {
+    "it", "its", "this", "that", "these", "those",
+    "them", "they", "him", "her", "he", "she",
+}
 
 
 def _extract_taught_query(question):
@@ -903,6 +931,9 @@ def _extract_taught_query(question):
         return None
 
     captured = match.group(1).strip().rstrip("?.!, ")
+
+    if captured.lower() in _BARE_REFERENCE_WORDS:
+        return None
 
     return captured or None
 

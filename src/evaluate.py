@@ -400,6 +400,62 @@ FACULTY_COURSES_TAUGHT_TESTS = [
         category="Faculty Courses Taught",
         metric="unsupported",
     ),
+
+    # Present-tense instructor intent (Sprint 10C): "who teaches X" now
+    # resolves through the same instructor lookup as "who has taught X",
+    # rather than silently falling through to the plain course-lookup
+    # branch and returning the generic course description instead of
+    # answering who teaches it - confirmed via direct structured_search()
+    # testing to be the actual prior behavior before this fix.
+    TestCase(
+        name="Present tense - who teaches a course code (CP312)",
+        turns=["Who teaches CP312?"],
+        check=lambda resp, at: (
+            contains_any(resp, "Foley", "Ebrahimi")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Faculty Courses Taught",
+    ),
+    TestCase(
+        name="Present tense - who teaches a course code (BU111)",
+        turns=["Who teaches BU111?"],
+        check=lambda resp, at: (
+            contains_any(resp, "Brandon Van Dam", "Van Dam")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Faculty Courses Taught",
+    ),
+    TestCase(
+        name="Present tense - who teaches a course name (Operating Systems)",
+        turns=["Who teaches Operating Systems?"],
+        check=lambda resp, at: (
+            contains_any(resp, "Operating Systems", "CP386")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Faculty Courses Taught",
+    ),
+    TestCase(
+        name="Present tense - graceful no-record response for an unknown course code",
+        turns=["Who teaches CP999?"],
+        check=lambda resp, at: is_graceful_fallback(resp),
+        category="Faculty Courses Taught",
+        metric="unsupported",
+    ),
+    TestCase(
+        # Negative case: "who teaches in/at X" is department/faculty-list
+        # phrasing (a different capability), not a course-instructor
+        # question - must NOT be hijacked by the broadened present-tense
+        # pattern. This is the exact collision the original code
+        # comment warned about, now guarded by the negative lookahead.
+        name="Negative case: 'who teaches in Marketing' still resolves to the department list, not course lookup",
+        turns=["Who teaches in Marketing?"],
+        check=lambda resp, at: (
+            contains_any(resp, "Marketing")
+            and "no course matching" not in resp.lower()
+            and not is_off_topic_decline(resp)
+        ),
+        category="Faculty Courses Taught",
+    ),
 ]
 
 # Real, verified data (see comments) - not hypothetical. Kaiyu Li's
@@ -1119,6 +1175,93 @@ def _check_beggar_recovered():
     )
 
 
+# Protects: the faculty-name encoding fix (Sprint 10C). Root cause was
+# response.text decoding with requests' guessed encoding (falls back to
+# ISO-8859-1 whenever the server's Content-Type omits a charset - WLU's
+# pages do this, and are actually UTF-8), producing mojibake like
+# "AngÃ¨le Foley" for "Angèle Foley". Fixed at the source
+# (get_faculty_links.py/load_faculty.py now parse response.content, not
+# response.text) and the 17 previously-corrupted rows were rebuilt via a
+# targeted re-fetch (not hardcoded string replacement). Pass criteria:
+# every specific name named in the fix is now exactly correct, and no
+# mojibake byte-pattern remains anywhere in the table (a general sweep,
+# not just the known cases - guards against any row this investigation
+# missed and against the bug ever recurring).
+def _check_faculty_name_encoding():
+
+    import sqlite3
+
+    conn = sqlite3.connect(str(ROOT_DIR / "data" / "faculty.db"))
+    cursor = conn.cursor()
+
+    # Specific, previously-confirmed-corrupted names (the exact
+    # before/after cases named in this fix), checked for exact equality
+    # against their correct, real spelling.
+    known_corrections = [
+        ("angele-foley", "Angèle Foley"),
+        ("magnus-mfoafo-mcarthy", "Magnus Mfoafo-M’Carthy"),
+        ("bill-oleary", "William O’Leary"),
+        ("micheal-j-kelly", "Micheál J. Kelly"),
+        ("karljurgen-feuerherm", "Karljürgen Feuerherm"),
+        ("jorg-broschek", "Jörg Broschek"),
+        ("john-edison-munoz-cardona", "John Edison Muñoz Cardona"),
+        ("amy-clements-cortes", "Amy Clements-Cortés"),
+        ("dirk-wallschlager", "Dirk Wallschläger"),
+        ("renee-s-macphee", "Renée S. MacPhee"),
+        ("ginette-lafreniere", "Ginette Lafrenière"),
+        ("david-rose", "David Rosé"),
+    ]
+
+    for url_fragment, expected_name in known_corrections:
+
+        cursor.execute(
+            "SELECT name FROM faculty WHERE source_url LIKE ?",
+            (f"%/{url_fragment}/%",)
+        )
+        row = cursor.fetchone()
+
+        yield (
+            f"Faculty name encoding: {url_fragment} is stored correctly",
+            bool(row) and row[0] == expected_name,
+            f"got {row[0] if row else None!r}, expected {expected_name!r}"
+        )
+
+    # General sweep: no row's name/title/research_interests/biography
+    # anywhere in the table still exhibits the mojibake pattern (raw
+    # UTF-8 bytes mis-decoded as Latin-1) - a round-trip re-encode/decode
+    # that succeeds AND changes the text is the reliable signature (a
+    # bare "Ã" or "â" alone is NOT reliable on its own, since both are
+    # also legitimate standalone characters in genuinely-correct
+    # non-English text - e.g. "Fordlândia" in one real bio - which this
+    # sweep deliberately does not flag).
+    def _is_mojibake(text):
+        if not text:
+            return False
+        try:
+            repaired = text.encode("latin-1").decode("utf-8")
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            return False
+        return repaired != text
+
+    cursor.execute("SELECT name, title, research_interests, biography, source_url FROM faculty")
+    rows = cursor.fetchall()
+
+    remaining = [
+        (name, field, url)
+        for name, title, research, bio, url in rows
+        for field, val in [("name", name), ("title", title), ("research_interests", research), ("biography", bio)]
+        if _is_mojibake(val)
+    ]
+
+    conn.close()
+
+    yield (
+        "Faculty name encoding: no mojibake remains anywhere in faculty.db",
+        len(remaining) == 0,
+        f"found {len(remaining)} still-corrupted fields: {remaining[:5]!r}" if remaining else ""
+    )
+
+
 def _check_course_prerequisites():
 
     import sqlite3
@@ -1559,6 +1702,7 @@ def run_data_integrity_checks():
     checks += list(_check_contextual_reference_resolution())
     checks += list(_check_program_course_requirements())
     checks += list(_check_entity_history_and_writeback())
+    checks += list(_check_faculty_name_encoding())
 
     passed_count = 0
 

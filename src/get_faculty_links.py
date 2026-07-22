@@ -278,7 +278,15 @@ def scrape_faculty_links(output_path):
             print(f"  Error: {e}")
             continue
 
-        soup = BeautifulSoup(response.text, "html.parser")
+        # response.text decodes using requests' guessed encoding, which
+        # falls back to ISO-8859-1 whenever the server's Content-Type
+        # header omits a charset (confirmed: WLU's pages do this, and are
+        # actually UTF-8) - producing exactly the mojibake corruption
+        # found in faculty names (Sprint 10C). response.content is the
+        # raw bytes; BeautifulSoup's own encoding detection (which reads
+        # the page's own <meta charset> and byte patterns) correctly
+        # identifies UTF-8 instead of inheriting requests' wrong guess.
+        soup = BeautifulSoup(response.content, "html.parser")
 
         current_h2 = None
         current_h3 = None
