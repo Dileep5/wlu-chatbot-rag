@@ -1322,6 +1322,15 @@ _PROGRAM_NORMALIZE_RULES = [
     (r"\bmaster of\b", " mast "),
     (r"\bdoctor of\b", " doc "),
     (r"\bdiploma in\b", " dip "),
+    # Abbreviated bachelor's-degree prefixes (Sprint 11B) - undergraduate
+    # program titles almost always use these short forms ("Honours BSc
+    # Computer Science") rather than spelling out "Bachelor of Science
+    # in Computer Science" the way graduate titles spell out "Master
+    # of...". Collapsed to the same "bach" token as "bachelor of" above,
+    # since they're the same credential level - confirmed against the
+    # real prefixes present in the discovered undergraduate catalog
+    # (BA, BBA, BKin, BMus, BSc).
+    (r"\bb(?:a|ba|kin|mus|sc)\b", " bach "),
     (r"\bprogram\b", " "),
     (r"\bdegree\b", " "),
 ]
@@ -1349,6 +1358,54 @@ def _strip_filler(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
+# Sprint 11B: _strip_filler() collapses degree-type phrases to a short
+# canonical token ("bach"/"mast"/...) rather than deleting them, on
+# purpose, so "Bachelor of X" and "Master of X" can never collide with
+# each other. That's exactly right for graduate titles, which always
+# spell the degree type out in full ("Master of Applied Computing") -
+# but undergraduate titles are consistently degree-prefixed too
+# ("Honours BSc Computer Science"), and users overwhelmingly just name
+# the bare subject ("Computer Science") without mentioning any degree
+# type at all. This goes one step further, stripping the collapsed
+# degree token itself, for a bare-subject fallback tried only after the
+# degree-aware Tier 2 match fails (search_program()).
+_DEGREE_TOKEN_PATTERN = re.compile(r"\b(?:bach|mast|doc|dip)\b")
+
+
+def _strip_to_subject(text):
+
+    return re.sub(r"\s+", " ", _DEGREE_TOKEN_PATTERN.sub(" ", _strip_filler(text))).strip()
+
+
+# Bare single-word subjects ("Philosophy", "Music", "History", "English",
+# "Psychology", "Biology" - all real undergraduate program subjects,
+# confirmed live) collide with ordinary English words the exact same way
+# single-word DEPARTMENT names do (Sprint 5C's "I love music"/"do you
+# speak English" guard) - confirmed live during Sprint 11B verification:
+# without this guard, "What is the philosophy behind this decision?" and
+# "I love music." both incorrectly resolved to a program. Deliberately
+# does NOT include "department" as a qualifying signal, unlike the
+# department guard - a question naming both a subject and the word
+# "department" ("Who coordinates the History department?") is asking
+# about the DEPARTMENT, not the program, and must be left for
+# search_department() to handle instead; including "department" here
+# would silently re-break that routing.
+_PROGRAM_SUBJECT_SIGNAL_PATTERN = re.compile(
+    r"\b(?:program|major|minor|degree|concentration|option|certificate|"
+    r"stud(?:y|ying)|undergraduate|at\s+laurier|at\s+wlu|"
+    r"at\s+wilfrid\s+laurier)\b",
+    re.IGNORECASE
+)
+
+
+def _subject_match_is_safe(subject, question_lower):
+
+    if " " in subject:
+        return True
+
+    return bool(_PROGRAM_SUBJECT_SIGNAL_PATTERN.search(question_lower))
+
+
 def _generate_acronym(program_name):
 
     text = program_name.lower()
@@ -1369,6 +1426,15 @@ def search_program(question, memory=None):
         "data/programs.db"
     )
 
+    # Sprint 11B: `program_type` and `description` are appended after
+    # the conditionally-present `level` column - sqlite3.Row keeps every
+    # existing positional access (row[0], row[3], ...) working unchanged
+    # while giving safe, unambiguous name-based access to the new
+    # columns regardless of whether `level` shifted their position
+    # (same pattern established in Sprint 10D/10E for courses/
+    # departments).
+    conn.row_factory = sqlite3.Row
+
     cursor = conn.cursor()
 
     level_column = ", level" if PROGRAMS_HAVE_LEVEL else ""
@@ -1379,7 +1445,9 @@ def search_program(question, memory=None):
         admission_requirements,
         program_requirements,
         source_url
-        {level_column}
+        {level_column},
+        program_type,
+        description
     FROM programs
     """)
 
@@ -1438,7 +1506,92 @@ def search_program(question, memory=None):
 
             return row
 
+    # Tier 2b: bare-subject fallback (Sprint 11B) - see _strip_to_subject()
+    # docstring. Tried only after the degree-aware Tier 2 match above
+    # fails. A bare subject name is often shared by several program-type
+    # variants of the same subject (major, minor, concentration,
+    # combined...), so this is checked in two passes: "major"-type rows
+    # first, so a bare subject name resolves to the plain major by
+    # default (per Sprint 11A's investigation recommendation) rather
+    # than an arbitrarily-ordered concentration/option/minor variant;
+    # any other type only as a second-pass fallback.
+    for preferred_types in (("major",), None):
+
+        for row in rows:
+
+            program_type = row["program_type"] if "program_type" in row.keys() else None
+
+            if preferred_types and program_type not in preferred_types:
+                continue
+
+            subject = _strip_to_subject(row[0].lower())
+
+            if (
+                len(subject) >= 3
+                and subject in normalized_question
+                and _subject_match_is_safe(subject, question_lower)
+            ):
+
+                if memory is not None:
+                    memory["last_program"] = row[0]
+                    _record_entity(memory, "program", row[0], row[0], "search_program")
+
+                return row
+
     return None
+
+
+# Deterministic "list the undergraduate catalog" intent (Sprint 11B) -
+# deliberately narrow (requires "undergraduate" explicitly, plus
+# "program(s)" and one of a small set of listing-style words) so it
+# never collides with a specific single-program question like "Tell me
+# about the undergraduate Computer Science program", which doesn't ask
+# what's available/offered/list-worthy, just names one program directly.
+def _has_undergraduate_program_list_intent(question_lower):
+
+    return bool(
+        "undergraduate" in question_lower
+        and re.search(r"\bprograms?\b", question_lower)
+        and re.search(r"\b(?:available|offered|exist|list|what)\b", question_lower)
+    )
+
+
+def search_undergraduate_program_list(question, memory=None):
+
+    if not _has_undergraduate_program_list_intent(question.lower()):
+        return None
+
+    conn = sqlite3.connect("data/programs.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT DISTINCT program_name FROM programs "
+        "WHERE level = 'undergraduate' ORDER BY program_name"
+    )
+
+    names = [row[0] for row in cursor.fetchall()]
+
+    conn.close()
+
+    if not names:
+        return None
+
+    total = len(names)
+    displayed = names[:30]
+
+    lines = "\n".join(f"- {name}" for name in displayed)
+
+    truncation_note = (
+        f"\n(Showing {len(displayed)} of {total} undergraduate programs. "
+        f"Ask about a specific program, major, or minor by name for more detail.)"
+        if total > len(displayed) else ""
+    )
+
+    return (
+        f"Undergraduate programs at Wilfrid Laurier University "
+        f"include:\n{lines}\n{truncation_note}",
+        None
+    )
 
 
 # Signals the user wants the program's *coordinator* specifically, not
@@ -2164,6 +2317,22 @@ def _department_level_line(result):
     return f"Level: {result['level'].capitalize()}\n"
 
 
+def _program_level_line(result):
+
+    if "level" not in result.keys() or not result["level"]:
+        return ""
+
+    return f"Level: {result['level'].capitalize()}\n"
+
+
+def _program_type_line(result):
+
+    if "program_type" not in result.keys() or not result["program_type"]:
+        return ""
+
+    return f"Program Type: {result['program_type'].capitalize()}\n"
+
+
 # Sprint 10D: surfaces courses.db metadata that was already captured by
 # the scraper but never shown anywhere - purely additive to
 # search_course()'s existing context, no new capability or routing.
@@ -2307,21 +2476,54 @@ Description:
 
         return context, result[5]
 
+    # UNDERGRADUATE PROGRAM LIST (Sprint 11B)
+    # Checked before the single-program lookup below: "What undergraduate
+    # programs are available?" doesn't name any specific program, so it
+    # would never match search_program() anyway, but is checked first
+    # for the same reason department-list intent is checked before a
+    # single-department lookup elsewhere in this cascade - a listing
+    # request and a single-item lookup are different capabilities
+    # answering different questions.
+
+    program_list_result = search_undergraduate_program_list(question, memory)
+
+    if program_list_result:
+        return program_list_result
+
     # PROGRAM
 
     result = search_program(question, memory)
 
     if result:
 
-        context = f"""
-Program: {result[0]}
-{_level_line(result, 4)}
-Admission Requirements:
-{result[1]}
+        context = f"Program: {result[0]}\n{_program_level_line(result)}{_program_type_line(result)}"
 
-Program Requirements:
-{result[2]}
-"""
+        # Sprint 11B: Description/Admission Requirements/Program
+        # Requirements are now each shown only when actually populated
+        # (same "only include sections with data" principle established
+        # for course metadata in Sprint 10D) - undergraduate programs
+        # deliberately have no program_requirements yet (course-
+        # requirement extraction is out of scope this sprint) and most
+        # have no admission_requirements at all (confirmed live: no
+        # undergraduate program page publishes per-program admission
+        # content), so showing empty labeled sections for every one of
+        # the 399 new rows would be misleading clutter. Every existing
+        # graduate program already has non-empty values for both
+        # fields, so this changes nothing for them.
+        description = result["description"] if "description" in result.keys() else None
+
+        if description and description.strip():
+            context += f"\nDescription:\n{description.strip()}\n"
+
+        admission = result[1]
+
+        if admission and admission.strip():
+            context += f"\nAdmission Requirements:\n{admission.strip()}\n"
+
+        requirements = result[2]
+
+        if requirements and requirements.strip():
+            context += f"\nProgram Requirements:\n{requirements.strip()}\n"
 
         # Coordinator info is only added when specifically asked for, so
         # every other program query keeps producing exactly the context

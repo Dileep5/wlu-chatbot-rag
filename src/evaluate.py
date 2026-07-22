@@ -297,6 +297,68 @@ PROGRAM_COMPARISON_TESTS = [
     ),
 ]
 
+# Protects: undergraduate program discovery and descriptive retrieval
+# (Sprint 11B), via the full chatbot. Pass criteria: a bare subject name
+# resolves to a real undergraduate major/minor without the user needing
+# to know the exact degree-type prefix; the catalog-listing query
+# returns real program names; graduate programs remain fully answerable
+# unchanged (coexistence); ordinary sentences that happen to contain a
+# single-word program subject are never hijacked (the same
+# false-positive class Sprint 5C fixed for department names).
+UNDERGRADUATE_PROGRAM_TESTS = [
+    TestCase(
+        name="Bare subject name resolves to the real major (Computer Science)",
+        turns=["Tell me about Computer Science."],
+        check=lambda resp, at: (
+            contains_any(resp, "Computer Science")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Undergraduate Programs",
+    ),
+    TestCase(
+        name="'X major' phrasing resolves correctly (Biology)",
+        turns=["Tell me about the Biology major."],
+        check=lambda resp, at: (
+            contains_any(resp, "Biology")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Undergraduate Programs",
+    ),
+    TestCase(
+        name="'X minor' phrasing gracefully resolves the closest real program (Data Science)",
+        turns=["What is the Data Science minor?"],
+        check=lambda resp, at: (
+            contains_any(resp, "Data Science")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Undergraduate Programs",
+    ),
+    TestCase(
+        name="Catalog listing query",
+        turns=["What undergraduate programs are available?"],
+        check=lambda resp, at: (
+            is_non_empty_response(resp)
+            and not is_off_topic_decline(resp)
+        ),
+        category="Undergraduate Programs",
+    ),
+    TestCase(
+        name="Coexistence: graduate program lookup still works unchanged",
+        turns=["What is the Master of Applied Computing program?"],
+        check=lambda resp, at: contains_any(resp, "Applied Computing"),
+        category="Undergraduate Programs",
+    ),
+    TestCase(
+        name="False-positive guard: casual mention of a program subject isn't hijacked",
+        turns=["I love music."],
+        check=lambda resp, at: (
+            is_non_empty_response(resp)
+            and not contains_any(resp, "Bachelor of Music", "Honours Bachelor")
+        ),
+        category="Undergraduate Programs",
+    ),
+]
+
 FACULTY_RETRIEVAL_TESTS = [
     TestCase(
         name="Economics department",
@@ -994,6 +1056,7 @@ CATEGORIES = [
     ("Program Retrieval", "Program Retrieval", PROGRAM_RETRIEVAL_TESTS),
     ("Program Aliases", "Aliases", PROGRAM_ALIAS_TESTS),
     ("Program Comparison", "Comparison", PROGRAM_COMPARISON_TESTS),
+    ("Undergraduate Programs", "Undergrad Programs", UNDERGRADUATE_PROGRAM_TESTS),
     ("Faculty Retrieval", "Faculty", FACULTY_RETRIEVAL_TESTS),
     ("Research Topic", "Research Topic", RESEARCH_TOPIC_TESTS),
     ("Faculty Courses Taught", "Courses Taught", FACULTY_COURSES_TAUGHT_TESTS),
@@ -1017,6 +1080,7 @@ CAPABILITY_COVERAGE = [
     ("Basic conversation / greetings", "Basic Conversation"),
     ("Conversation memory (follow-up phrases)", "Conversation Memory"),
     ("Program lookup (name/alias/acronym)", "Program Retrieval, Aliases, Comparison"),
+    ("Undergraduate program discovery + descriptive retrieval", "Undergraduate Programs"),
     ("Single-person faculty lookup", "Faculty Retrieval"),
     ("Department lookup + single-word false-positive guard", "Faculty Retrieval, Department False-Positive Prevention"),
     ("Department -> faculty list / faculty-level list", "Faculty Retrieval"),
@@ -1713,6 +1777,148 @@ def _check_department_coordinator():
     )
 
 
+# Protects: undergraduate program discovery and catalog population
+# (Sprint 11B) - department page -> "Programs" anchor -> program.php
+# links, deduplicated by URL. Pass criteria: a substantial, real catalog
+# was discovered (not a handful of leftover shells); every program-type
+# bucket is represented; no duplicate program_url exists (a broken-dedup
+# signal, distinct from duplicate NAMES across different URLs, which is
+# real and expected - e.g. the same minor offered from two campuses);
+# graduate data (17 programs, 171 program_course_requirements rows) is
+# completely undisturbed by the migration and reload.
+def _check_undergraduate_program_discovery():
+
+    import sqlite3
+
+    conn = sqlite3.connect(str(ROOT_DIR / "data" / "programs.db"))
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) FROM programs WHERE level = 'undergraduate'")
+    undergrad_count = cursor.fetchone()[0]
+
+    yield (
+        "Undergraduate discovery: a substantial real catalog was populated",
+        undergrad_count >= 300,
+        f"got {undergrad_count} undergraduate program rows"
+    )
+
+    cursor.execute(
+        "SELECT DISTINCT program_type FROM programs "
+        "WHERE level = 'undergraduate' AND program_type IS NOT NULL"
+    )
+    types_found = {row[0] for row in cursor.fetchall()}
+    expected_types = {"major", "minor", "option", "certificate", "concentration", "combined"}
+
+    yield (
+        "Undergraduate discovery: every expected program_type is represented",
+        expected_types.issubset(types_found),
+        f"found types: {types_found!r}"
+    )
+
+    cursor.execute(
+        "SELECT source_url, COUNT(*) c FROM programs "
+        "WHERE level = 'undergraduate' GROUP BY source_url HAVING c > 1"
+    )
+    duplicate_urls = cursor.fetchall()
+
+    yield (
+        "Undergraduate discovery: no duplicate program_url (dedup worked)",
+        len(duplicate_urls) == 0,
+        f"duplicates found: {duplicate_urls}" if duplicate_urls else ""
+    )
+
+    # Coexistence: graduate data must be completely untouched by the
+    # undergraduate migration/reload.
+    cursor.execute("SELECT COUNT(*) FROM programs WHERE level = 'graduate'")
+    graduate_count = cursor.fetchone()[0]
+
+    yield (
+        "Coexistence: all 17 graduate programs preserved",
+        graduate_count == 17,
+        f"got {graduate_count} graduate program rows"
+    )
+
+    cursor.execute("PRAGMA table_info(program_course_requirements)")
+    prog_req_cols = [row[1] for row in cursor.fetchall()]
+
+    yield (
+        "Coexistence: program_course_requirements gained a level column (the reload fix)",
+        "level" in prog_req_cols,
+        f"got columns: {prog_req_cols!r}"
+    )
+
+    cursor.execute("SELECT COUNT(*) FROM program_course_requirements WHERE level = 'graduate'")
+    grad_req_count = cursor.fetchone()[0]
+
+    yield (
+        "Coexistence: all 171 graduate program_course_requirements rows preserved and level-tagged",
+        grad_req_count == 171,
+        f"got {grad_req_count} rows with level='graduate'"
+    )
+
+    conn.close()
+
+    # Retrieval: the four required example queries, checked via direct
+    # structured_search() calls (not AppTest) since it's the correct
+    # program_type/level/real-data grounding being verified here, not
+    # the LLM's paraphrase of it.
+    sys.path.insert(0, str(SRC_DIR))
+    from retriever import structured_search
+
+    result = structured_search("Tell me about Computer Science.", {})
+    yield (
+        "Undergraduate retrieval: 'Tell me about Computer Science' resolves to a real major",
+        bool(result) and "Computer Science" in result[0] and "Program Type: Major" in result[0],
+        f"got {result[0][:150] if result else None!r}"
+    )
+
+    result = structured_search("Tell me about the Biology major.", {})
+    yield (
+        "Undergraduate retrieval: 'Biology major' resolves correctly",
+        bool(result) and "Biology" in result[0] and "Undergraduate" in result[0],
+        f"got {result[0][:150] if result else None!r}"
+    )
+
+    result = structured_search("What undergraduate programs are available?", {})
+    yield (
+        "Undergraduate retrieval: catalog listing query returns real program names",
+        bool(result) and "Minor" in result[0] and "undergraduate programs" in result[0].lower(),
+        f"got {result[0][:150] if result else None!r}"
+    )
+
+    # Single-word subject false-positive guard (Sprint 11B) - the exact
+    # regression caught and fixed during this sprint's own verification:
+    # bare-subject program matching must never hijack ordinary sentences
+    # that happen to contain a single-word program subject, the same
+    # class of false positive Sprint 5C fixed for department names.
+    false_positive_cases = [
+        "Tell me about the history of coffee.",
+        "Do you speak English?",
+        "What is the philosophy behind this decision?",
+        "I love music.",
+        "This is just common sense psychology.",
+    ]
+
+    for question in false_positive_cases:
+        result = structured_search(question, {})
+        yield (
+            f"Undergraduate retrieval: no false-positive program match for {question!r}",
+            result is None,
+            f"got {result[0][:100] if result else None!r}"
+        )
+
+    # Department-vs-program routing guard: a question naming both a
+    # subject and "department" must still resolve to the DEPARTMENT
+    # capability, not get hijacked by the new bare-subject program
+    # matching (the second regression caught during this sprint).
+    result = structured_search("Who coordinates the History department?", {})
+    yield (
+        "Undergraduate retrieval: 'History department' questions still resolve to the department, not a program",
+        bool(result) and "Department:" in result[0] and "Program:" not in result[0],
+        f"got {result[0][:100] if result else None!r}"
+    )
+
+
 def _check_contextual_reference_resolution():
 
     sys.path.insert(0, str(SRC_DIR))
@@ -2040,6 +2246,7 @@ def run_data_integrity_checks():
     checks += list(_check_course_prerequisites())
     checks += list(_check_course_metadata_exposure())
     checks += list(_check_department_coordinator())
+    checks += list(_check_undergraduate_program_discovery())
     checks += list(_check_image_link_rejection())
     checks += list(_check_beggar_recovered())
     checks += list(_check_contextual_reference_resolution())
