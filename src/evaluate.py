@@ -649,6 +649,43 @@ COURSE_PREREQUISITE_TESTS = [
     ),
 ]
 
+# Protects: exposure of existing courses.db metadata (Sprint 10D), via
+# the full chatbot rather than a direct structured_search() call. The
+# exact field-presence/ordering guarantees are already checked
+# deterministically in Data Integrity (_check_course_metadata_exposure);
+# these confirm the enrichment actually reaches a real, LLM-phrased
+# answer, and that a plain course question with none of these fields
+# still answers normally (no regression to existing behavior).
+COURSE_METADATA_TESTS = [
+    TestCase(
+        name="Exclusions surfaced in a real answer (CQ609)",
+        turns=["What is CQ609?"],
+        check=lambda resp, at: (
+            contains_any(resp, "CQ640D", "exclusion")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Course Metadata",
+    ),
+    TestCase(
+        name="Location surfaced in a real answer (UU400)",
+        turns=["What is UU400?"],
+        check=lambda resp, at: (
+            contains_any(resp, "Brantford")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Course Metadata",
+    ),
+    TestCase(
+        name="Plain course question with no metadata fields still answers normally",
+        turns=["What is CS600?"],
+        check=lambda resp, at: (
+            contains_any(resp, "Communication Studies", "Graduate Seminar")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Course Metadata",
+    ),
+]
+
 # Protects: graduate program required-course retrieval (Sprint 7D), via
 # the full chatbot. Pass criteria: direct, reverse, and relational
 # lookups all reflect real data; an undergraduate program never produces
@@ -898,6 +935,7 @@ CATEGORIES = [
     ("Department False-Positive Prevention", "Dept False-Positive", DEPARTMENT_FALSE_POSITIVE_TESTS),
     ("Coordinator Lookup", "Coordinator", COORDINATOR_LOOKUP_TESTS),
     ("Course Prerequisites", "Prerequisites", COURSE_PREREQUISITE_TESTS),
+    ("Course Metadata", "Course Metadata", COURSE_METADATA_TESTS),
     ("Graduate Program Requirements", "Grad Program Reqs", GRADUATE_PROGRAM_REQUIREMENTS_TESTS),
     ("Multi-Turn Conversations", "Multi-Turn", MULTI_TURN_CONVERSATION_TESTS),
     ("Entity History", "Entity History", ENTITY_HISTORY_TESTS),
@@ -920,6 +958,7 @@ CAPABILITY_COVERAGE = [
     ("Person + topic courses-taught lookup", "Person + Topic Courses Taught"),
     ("Program coordinator lookup", "Coordinator Lookup"),
     ("Course prerequisites (direct/reverse/relational)", "Course Prerequisites"),
+    ("Course metadata exposure (corequisites/exclusions/location/notes)", "Course Metadata"),
     ("Graduate program requirements (direct/reverse/relational)", "Graduate Program Requirements"),
     ("Multi-turn contextual reference resolution", "Multi-Turn Conversations"),
     ("Entity-history ordinal/list resolution + cross-function write-back", "Entity History"),
@@ -1372,6 +1411,105 @@ def _check_course_prerequisites():
     )
 
 
+# Protects: exposure of existing courses.db metadata fields (Sprint 10D)
+# - prerequisites_text, corequisites_text, exclusions_text,
+# location_text, notes_text were already scraped and stored but never
+# shown in a plain course lookup's context before this sprint. Purely
+# additive: no new search function, no new intent pattern, no routing
+# change - just more of the same already-fetched row surfaced. Checked
+# via direct structured_search() calls (not AppTest) since the exact
+# field labels and their order in the raw context text is what's being
+# verified, not the LLM's paraphrase of it. Pass criteria: each field
+# appears, labeled, only when actually populated, in the fixed order
+# Prerequisites/Corequisites/Exclusions/Location/Notes, and a course
+# with none of the five renders identically to before this sprint.
+def _check_course_metadata_exposure():
+
+    sys.path.insert(0, str(SRC_DIR))
+    from retriever import structured_search
+
+    # CP312: prerequisites only (already verified elsewhere in this
+    # suite to have real, specific prerequisite text).
+    result = structured_search("What is CP312?", {})
+    text = result[0] if result else ""
+    yield (
+        "Course metadata: CP312's plain lookup now includes Prerequisites",
+        bool(result) and "Prerequisites: CP264" in text,
+        f"got {text!r}"
+    )
+    yield (
+        "Course metadata: CP312 correctly omits Corequisites/Exclusions/Location/Notes (not populated)",
+        bool(result) and not any(
+            label in text for label in ("Corequisites:", "Exclusions:", "Location:", "Notes:")
+        ),
+        f"got {text!r}"
+    )
+
+    # EN645: corequisites only.
+    result = structured_search("What is EN645?", {})
+    text = result[0] if result else ""
+    yield (
+        "Course metadata: EN645's plain lookup includes Corequisites",
+        bool(result) and "Corequisites:" in text,
+        f"got {text!r}"
+    )
+
+    # UU400: prerequisites + exclusions + location, in that fixed order,
+    # with corequisites/notes correctly absent.
+    result = structured_search("What is UU400?", {})
+    text = result[0] if result else ""
+    has_all_three = bool(result) and all(
+        label in text for label in ("Prerequisites:", "Exclusions:", "Location:")
+    )
+    correct_order = (
+        has_all_three
+        and text.find("Prerequisites:") < text.find("Exclusions:") < text.find("Location:")
+    )
+    yield (
+        "Course metadata: UU400 includes Prerequisites, Exclusions, and Location in that order",
+        correct_order,
+        f"got {text!r}"
+    )
+    yield (
+        "Course metadata: UU400 correctly omits Corequisites/Notes (not populated)",
+        bool(result) and not any(label in text for label in ("Corequisites:", "Notes:")),
+        f"got {text!r}"
+    )
+
+    # CQ609: exclusions + notes, in that fixed order.
+    result = structured_search("What is CQ609?", {})
+    text = result[0] if result else ""
+    has_both = bool(result) and "Exclusions:" in text and "Notes:" in text
+    yield (
+        "Course metadata: CQ609 includes Exclusions and Notes in that order",
+        has_both and text.find("Exclusions:") < text.find("Notes:"),
+        f"got {text!r}"
+    )
+
+    # CS600: none of the five fields populated - context must render
+    # identically to how it did before this sprint (no stray blank
+    # metadata section), while all pre-existing course information
+    # (code/name/credits/department/description) is still present.
+    result = structured_search("What is CS600?", {})
+    text = result[0] if result else ""
+    yield (
+        "Course metadata: CS600 (no metadata fields) shows no metadata section at all",
+        bool(result) and not any(
+            label in text
+            for label in ("Prerequisites:", "Corequisites:", "Exclusions:", "Location:", "Notes:")
+        ),
+        f"got {text!r}"
+    )
+    yield (
+        "Course metadata: CS600's existing course information is fully preserved",
+        bool(result) and all(
+            field in text
+            for field in ("Course Code: CS600", "Credits:", "Department:", "Description:")
+        ),
+        f"got {text!r}"
+    )
+
+
 def _check_contextual_reference_resolution():
 
     sys.path.insert(0, str(SRC_DIR))
@@ -1697,6 +1835,7 @@ def run_data_integrity_checks():
     checks += list(_check_no_duplicate_faculty_records())
     checks += list(_check_email_extraction())
     checks += list(_check_course_prerequisites())
+    checks += list(_check_course_metadata_exposure())
     checks += list(_check_image_link_rejection())
     checks += list(_check_beggar_recovered())
     checks += list(_check_contextual_reference_resolution())

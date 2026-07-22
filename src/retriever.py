@@ -330,6 +330,16 @@ def search_course(question, memory=None):
         "data/courses.db"
     )
 
+    # Sprint 10D: the additional metadata fields below are appended
+    # after the conditionally-present `level` column, so their
+    # positional index would otherwise depend on COURSES_HAVE_LEVEL
+    # (fragile, easy to miscount). sqlite3.Row supports the exact same
+    # positional access every existing caller already uses (result[0],
+    # result[1], ...) while also allowing safe name-based access
+    # (result["exclusions_text"]) for the new fields regardless of
+    # where `level` did or didn't shift things.
+    conn.row_factory = sqlite3.Row
+
     cursor = conn.cursor()
 
     level_column = ", level" if COURSES_HAVE_LEVEL else ""
@@ -342,7 +352,12 @@ def search_course(question, memory=None):
         description,
         department_name,
         source_url
-        {level_column}
+        {level_column},
+        prerequisites_text,
+        corequisites_text,
+        exclusions_text,
+        location_text,
+        notes_text
     FROM courses
     WHERE course_code=?
     """, (course_code,))
@@ -2111,6 +2126,53 @@ def _level_line(result, index):
     return f"Level: {result[index].capitalize()}\n"
 
 
+# _level_line(result, index) is shared with search_program()/
+# search_department(), which still return plain tuples with nothing
+# appended after their own conditional level column - its length-based
+# "wasn't queried" check is correct and unaffected for those two. The
+# COURSE row now always has 5 more columns appended after where `level`
+# conditionally sits, so that length check would never trigger there
+# even when level is genuinely absent, and reading a fixed index 6
+# would silently read prerequisites_text instead. sqlite3.Row's
+# name-based lookup sidesteps the whole positional-shift problem.
+def _course_level_line(result):
+
+    if "level" not in result.keys() or not result["level"]:
+        return ""
+
+    return f"Level: {result['level'].capitalize()}\n"
+
+
+# Sprint 10D: surfaces courses.db metadata that was already captured by
+# the scraper but never shown anywhere - purely additive to
+# search_course()'s existing context, no new capability or routing.
+# Fixed, consistent order regardless of which fields happen to be
+# present; a field with no data simply produces no line at all, so a
+# course with none of these five populated renders identically to
+# before this sprint.
+_COURSE_METADATA_FIELDS = [
+    ("Prerequisites", "prerequisites_text"),
+    ("Corequisites", "corequisites_text"),
+    ("Exclusions", "exclusions_text"),
+    ("Location", "location_text"),
+    ("Notes", "notes_text"),
+]
+
+
+def _course_metadata_section(result):
+
+    lines = [
+        f"{label}: {result[column].strip()}"
+        for label, column in _COURSE_METADATA_FIELDS
+        if result[column] and result[column].strip()
+    ]
+
+    if not lines:
+        return ""
+
+    return "\n" + "\n".join(lines) + "\n"
+
+
 def _format_faculty_list_context(label, name, rows):
 
     total = len(rows)
@@ -2217,10 +2279,10 @@ Course Code: {result[0]}
 Course Name: {result[1]}
 Credits: {result[2]}
 Department: {result[4]}
-{_level_line(result, 6)}
+{_course_level_line(result)}
 Description:
 {result[3]}
-"""
+{_course_metadata_section(result)}"""
 
         return context, result[5]
 
