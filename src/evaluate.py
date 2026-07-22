@@ -35,6 +35,32 @@ class TestCase:
 
 # -----------------------------
 # Response helpers
+#
+# Sprint 10A audit (see investigation report for full detail): every
+# helper below was reviewed for brittle substring matching that could
+# produce FALSE POSITIVES - a check failing a genuinely correct answer
+# because of coincidental wording, not because anything is actually
+# wrong. Only one was found to have a confirmed, reproduced case of this
+# (is_off_topic_decline, fixed below). The others are documented as
+# audited-and-sound rather than left unexamined:
+#
+# - contains_any()/contains_all(): substring matching, but every keyword
+#   used against them project-wide is a specific proper noun, course
+#   code, or distinctive multi-word phrase (checked directly against
+#   every call site in this file) - there is no coincidental-collision
+#   risk here comparable to is_off_topic_decline's two-generic-words
+#   problem, so no change was made.
+# - is_non_empty_response(): a permissive lower bound (non-empty, not a
+#   literal error string) - it can never wrongly FAIL a correct answer,
+#   only under-verify an incorrect one, which is a different (and
+#   already separately covered by contains_any's factual-content checks)
+#   concern than what this audit targets.
+# - is_clarification_response(): checks for "i'm not sure", but every
+#   clarification message retriever.py produces is a fixed, hardcoded
+#   string returned with NO LLM involvement (never passed through
+#   generate_answer()) and is a deliberate, established sentinel phrase
+#   (Sprint 7B/9B), not a coincidental heuristic guess - unlike
+#   is_off_topic_decline, the true side here is 100% deterministic.
 # -----------------------------
 
 def contains_any(text: str, *keywords: str) -> bool:
@@ -52,17 +78,56 @@ def is_non_empty_response(text: str) -> bool:
 
 
 def is_off_topic_decline(text: str) -> bool:
-    lower = text.lower()
-    return "wilfrid laurier" in lower and "only" in lower
+    # Previously: "wilfrid laurier" in lower and "only" in lower. This
+    # heuristic produced confirmed, reproduced false positives (Sprint
+    # 9B/9C investigations) whenever a genuinely correct, grounded answer
+    # happened to contain the word "only" for an unrelated reason - e.g.
+    # scraped department text ("Only students who are graduates...") or
+    # a retrieval function's own scope disclaimer ("This only covers
+    # explicitly required courses..."). Both confirmed cases involved
+    # answers that also naturally mention "Wilfrid Laurier University",
+    # so the two-generic-word co-occurrence check was never a reliable
+    # signal of an off-topic decline specifically.
+    #
+    # The off-topic decline is actually a FIXED, hardcoded constant
+    # (app.py's OFF_TOPIC_MESSAGE) returned verbatim with no LLM
+    # involvement whatsoever - the off-topic branch in app.py assigns it
+    # directly (`answer = OFF_TOPIC_MESSAGE`), never through
+    # generate_answer(). Checking for the actual constant text is
+    # therefore not a heuristic at all: it deterministically matches
+    # exactly and only when that exact branch fired, eliminating the
+    # false-positive class entirely. Imported lazily (matching this
+    # file's existing pattern for retriever/get_faculty_links/
+    # load_faculty) rather than at module level, so importing app.py's
+    # side effects only ever happen after an AppTest has already run one.
+    from app import OFF_TOPIC_MESSAGE
+
+    return OFF_TOPIC_MESSAGE in text
 
 
 def is_clarification_response(text: str) -> bool:
-    # All five resolve_contextual_reference() clarification messages
-    # (course/program/department/faculty/generic) begin "I'm not sure
-    # ..." - this is deliberately the same literal-text check used
-    # throughout Sprint 7B's own verification, kept here as a single
-    # shared helper rather than re-deriving it per test.
+    # All clarification messages resolve_contextual_reference() produces
+    # (course/program/department/faculty/generic/compare) begin "I'm not
+    # sure" - a deliberate, established sentinel phrase (Sprint 7B/9B),
+    # not a coincidental heuristic guess, and every one of them bypasses
+    # the LLM entirely (assigned directly, never through
+    # generate_answer()) - this is deliberately the same literal-text
+    # check used throughout Sprint 7B's own verification, kept here as a
+    # single shared helper rather than re-deriving it per test.
     return "i'm not sure" in text.lower()
+
+
+def is_graceful_fallback(text: str) -> bool:
+    """Capability-aware validator for 'this should decline/fall back
+    gracefully rather than fabricate' tests (Sprint 10A) - replaces the
+    repeated inline `is_non_empty_response(resp) and not
+    is_off_topic_decline(resp)` lambda pattern used across every
+    'unsupported' metric test with one named helper expressing what's
+    actually being verified: a real, non-empty response was produced,
+    and it wasn't misrouted into an off-topic decline (using the fixed,
+    non-heuristic check above)."""
+
+    return is_non_empty_response(text) and not is_off_topic_decline(text)
 
 
 # -----------------------------
@@ -324,20 +389,14 @@ FACULTY_COURSES_TAUGHT_TESTS = [
     TestCase(
         name="Graceful no-record response for an unknown course code",
         turns=["Who has taught CP999?"],
-        check=lambda resp, at: (
-            is_non_empty_response(resp)
-            and not is_off_topic_decline(resp)
-        ),
+        check=lambda resp, at: is_graceful_fallback(resp),
         category="Faculty Courses Taught",
         metric="unsupported",
     ),
     TestCase(
         name="Graceful no-match response for an unknown course name",
         turns=["Who has taught Advanced Underwater Basket Weaving?"],
-        check=lambda resp, at: (
-            is_non_empty_response(resp)
-            and not is_off_topic_decline(resp)
-        ),
+        check=lambda resp, at: is_graceful_fallback(resp),
         category="Faculty Courses Taught",
         metric="unsupported",
     ),
@@ -369,28 +428,19 @@ PERSON_TOPIC_COURSES_TAUGHT_TESTS = [
     TestCase(
         name="No topical match for a resolved person with real course history",
         turns=["Has Kaiyu Li taught networking courses?"],
-        check=lambda resp, at: (
-            is_non_empty_response(resp)
-            and not is_off_topic_decline(resp)
-        ),
+        check=lambda resp, at: is_graceful_fallback(resp),
         category="Person + Topic Courses Taught",
     ),
     TestCase(
         name="No course-history available for a resolved person",
         turns=["Has Shohini Ghose taught any AI courses?"],
-        check=lambda resp, at: (
-            is_non_empty_response(resp)
-            and not is_off_topic_decline(resp)
-        ),
+        check=lambda resp, at: is_graceful_fallback(resp),
         category="Person + Topic Courses Taught",
     ),
     TestCase(
         name="Unknown/unresolvable faculty member",
         turns=["Has John Q Nonexistentperson taught database courses?"],
-        check=lambda resp, at: (
-            is_non_empty_response(resp)
-            and not is_off_topic_decline(resp)
-        ),
+        check=lambda resp, at: is_graceful_fallback(resp),
         category="Person + Topic Courses Taught",
     ),
 ]
@@ -492,10 +542,7 @@ COORDINATOR_LOOKUP_TESTS = [
     TestCase(
         name="MBA coordinator - graceful fallback (no data on file)",
         turns=["Who coordinates the MBA?"],
-        check=lambda resp, at: (
-            is_non_empty_response(resp)
-            and not is_off_topic_decline(resp)
-        ),
+        check=lambda resp, at: is_graceful_fallback(resp),
         category="Coordinator Lookup",
         metric="unsupported",
     ),
@@ -540,10 +587,7 @@ COURSE_PREREQUISITE_TESTS = [
     TestCase(
         name="Hallucination guard - nonexistent course code",
         turns=["Does CP312 require CP999?"],
-        check=lambda resp, at: (
-            is_non_empty_response(resp)
-            and not is_off_topic_decline(resp)
-        ),
+        check=lambda resp, at: is_graceful_fallback(resp),
         category="Course Prerequisites",
         metric="unsupported",
     ),
@@ -577,10 +621,7 @@ GRADUATE_PROGRAM_REQUIREMENTS_TESTS = [
     TestCase(
         name="Graceful fallback - course not required by MAC",
         turns=["Does the Master of Applied Computing require CP601?"],
-        check=lambda resp, at: (
-            is_non_empty_response(resp)
-            and not is_off_topic_decline(resp)
-        ),
+        check=lambda resp, at: is_graceful_fallback(resp),
         category="Graduate Program Requirements",
         metric="unsupported",
     ),
