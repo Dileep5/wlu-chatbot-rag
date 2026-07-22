@@ -486,6 +486,173 @@ def _extract_year_based_course_refs(program_soup):
     return True, results
 
 
+# Sprint 11E: flat "Required Courses:" undergraduate program pages
+# (Certificate in Criminology and similar) - identified in Sprint 11D
+# as the safest, most deterministic remaining layout: the heading is
+# wrapped in the same <b> tag convention as Sprint 11C's Year N
+# markers, confirmed live. Deliberately narrower than Sprint 11C's
+# tokenizer in one respect (every <b> tag is captured as a heading
+# boundary, not just ones matching "Year N") and broader in another
+# (the page's own boundary marker varies - Year-marker pages use
+# <div class="subanchor">, flat-list pages use
+# <div class="greyheading">Additional Information</div> instead,
+# confirmed live on the Criminology page - both are honored here).
+_REQUIRED_COURSES_HEADING_PATTERN = re.compile(r"^Required\s+Courses?\b", re.IGNORECASE)
+
+# A matched "Required Courses" section is dropped entirely (not
+# partially extracted) if its own text uses choice/pool language -
+# Sprint 11D found roughly half of the broader flat-list catalog uses
+# genuinely different, pool-style prose ("selected from", "choose N
+# of...") that would be misrepresented as hard requirements if treated
+# the same as a real flat list. "one of X, Y, Z" style alternatives are
+# deliberately NOT excluded here - that's the same simplification
+# Sprint 11C already applies to CS-style Year N pages (capturing every
+# alternative rather than resolving the choice), kept consistent here.
+_CHOICE_LANGUAGE_EXCLUSION_PATTERN = re.compile(
+    r"\bchoose\b|\bchosen from\b|\bselected from\b|\bcourse pool\b",
+    re.IGNORECASE
+)
+
+
+def _tokenize_bold_marked_content(program_soup):
+
+    content = program_soup.find("div", class_="content")
+
+    if not content:
+        return []
+
+    tokens = []
+
+    for element in content.descendants:
+
+        if isinstance(element, Tag) and (
+            "subanchor" in (element.get("class") or [])
+            or "greyheading" in (element.get("class") or [])
+        ):
+            break
+
+        if isinstance(element, Tag) and element.name == "b":
+            tokens.append(("heading", element.get_text(strip=True)))
+            continue
+
+        if (
+            isinstance(element, Tag)
+            and element.name == "a"
+            and "course.php" in (element.get("href") or "")
+        ):
+
+            if "glossaryTerm" in (element.get("class") or []):
+                continue
+
+            code_match = _COURSE_CODE_PATTERN.search(
+                element.get_text(strip=True).upper()
+            )
+
+            if code_match:
+                tokens.append(("course", code_match.group()))
+
+            continue
+
+        if isinstance(element, NavigableString):
+
+            if element.parent and element.parent.name in ("a", "b"):
+                continue
+
+            text = str(element)
+
+            if text.strip():
+                tokens.append(("text", text))
+
+    return tokens
+
+
+def _extract_flat_required_course_refs(program_soup):
+    """Returns a list of course codes found under a <b>Required
+    Course(s):</b> heading, stopping at the next <b> tag (any) or the
+    page's Additional Information/Program Regulations boundary -
+    whichever comes first. Returns [] if no such heading exists at all,
+    or if every matched section used choice/pool language (see module
+    comment above) - never a partial extraction of an excluded section.
+    """
+
+    tokens = _tokenize_bold_marked_content(program_soup)
+
+    sections = []
+    current_heading = None
+    current_courses = []
+    current_text_parts = []
+
+    for index, (kind, value) in enumerate(tokens):
+
+        if kind == "heading":
+
+            if current_heading is not None:
+                sections.append(
+                    (current_heading, current_courses, "".join(current_text_parts))
+                )
+
+            current_heading = value
+            current_courses = []
+            current_text_parts = []
+            continue
+
+        if current_heading is None or not _REQUIRED_COURSES_HEADING_PATTERN.match(current_heading):
+            continue
+
+        if kind == "text":
+            current_text_parts.append(value)
+            continue
+
+        if kind == "course":
+
+            # "recommended" exclusion, checked against the text
+            # immediately following this course mention (up to the next
+            # course/heading token) - same local-lookahead approach as
+            # Sprint 11C.
+            lookahead_parts = []
+
+            for next_kind, next_value in tokens[index + 1:]:
+
+                if next_kind in ("course", "heading"):
+                    break
+
+                lookahead_parts.append(next_value)
+
+            lookahead_text = "".join(lookahead_parts)
+
+            if _RECOMMENDED_TEXT_PATTERN.search(lookahead_text):
+                continue
+
+            current_courses.append(value)
+
+    if current_heading is not None:
+        sections.append((current_heading, current_courses, "".join(current_text_parts)))
+
+    results = []
+    seen = set()
+
+    for heading, courses, section_text in sections:
+
+        if not _REQUIRED_COURSES_HEADING_PATTERN.match(heading):
+            continue
+
+        if not courses:
+            continue
+
+        if _CHOICE_LANGUAGE_EXCLUSION_PATTERN.search(section_text):
+            continue
+
+        for code in courses:
+
+            if code in seen:
+                continue
+
+            seen.add(code)
+            results.append(code)
+
+    return results
+
+
 def load_undergraduate_programs(
     program_links_csv="outputs/undergraduate_program_links.csv"
 ):
@@ -511,6 +678,7 @@ def load_undergraduate_programs(
 
     year_marker_pages = 0
     programs_with_requirements = 0
+    flat_required_programs = 0
     requirement_rows_inserted = 0
     unsupported_pages = 0
 
@@ -640,7 +808,40 @@ def load_undergraduate_programs(
                             requirement_rows_inserted += 1
 
                 elif not is_year_marker_page:
-                    unsupported_pages += 1
+
+                    # Sprint 11E: only attempted for pages that aren't
+                    # already Year-marker style - confirmed mutually
+                    # exclusive layouts during Sprint 11D's
+                    # classification (a page with <b>Year N</b> markers
+                    # never also uses the flat "Required Courses:"
+                    # heading convention).
+                    flat_refs = _extract_flat_required_course_refs(soup)
+
+                    if flat_refs:
+
+                        flat_required_programs += 1
+
+                        for course_code in flat_refs:
+
+                            cursor.execute("""
+                            INSERT OR IGNORE INTO program_course_requirements
+                            (program_name, course_code, requirement_type, raw_text, level, year, term)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                program_name,
+                                course_code,
+                                "required",
+                                None,
+                                "undergraduate",
+                                None,
+                                None,
+                            ))
+
+                            if cursor.rowcount:
+                                requirement_rows_inserted += 1
+
+                    else:
+                        unsupported_pages += 1
 
             except Exception as e:
 
@@ -651,13 +852,15 @@ def load_undergraduate_programs(
 
     print("\nDone!")
     print(f"Year-marker pages detected: {year_marker_pages}")
-    print(f"Programs with extracted requirements: {programs_with_requirements}")
+    print(f"Programs with extracted Year-marker requirements: {programs_with_requirements}")
+    print(f"Programs with extracted flat 'Required Courses' requirements: {flat_required_programs}")
     print(f"Requirement rows inserted: {requirement_rows_inserted}")
-    print(f"Pages with no Year N markers at all (unsupported shape): {unsupported_pages}")
+    print(f"Pages with no extractable requirement data at all: {unsupported_pages}")
 
     return {
         "year_marker_pages": year_marker_pages,
         "programs_with_requirements": programs_with_requirements,
+        "flat_required_programs": flat_required_programs,
         "requirement_rows_inserted": requirement_rows_inserted,
         "unsupported_pages": unsupported_pages,
     }

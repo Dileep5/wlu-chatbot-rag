@@ -423,6 +423,49 @@ UNDERGRADUATE_COURSE_REQUIREMENT_TESTS = [
     ),
 ]
 
+# Protects: flat "Required Courses:" undergraduate extraction (Sprint
+# 11E), via the full chatbot. Pass criteria: a program with a literal
+# "Required Courses:" heading resolves with real data; a pool-style
+# program (choose/selected-from language) still answers descriptively
+# without fabricating a requirement list; Year-marker (Sprint 11C) and
+# graduate retrieval remain fully unaffected.
+FLAT_REQUIRED_COURSE_TESTS = [
+    TestCase(
+        name="Flat-list program with a 'Required Courses:' heading resolves with real data",
+        turns=["What is required for the Certificate in Criminology?"],
+        check=lambda resp, at: (
+            contains_any(resp, "CC100", "CC210")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Flat Required Courses",
+    ),
+    TestCase(
+        name="'Does X require Y' phrasing resolves correctly for a flat-extracted program",
+        turns=["Does the Certificate in Criminology require CC100?"],
+        check=lambda resp, at: contains_any(resp, "Yes", "yes"),
+        category="Flat Required Courses",
+    ),
+    TestCase(
+        name="Pool-style program (choose/selected from) still answers descriptively, no fabrication",
+        turns=["What courses are required for the Ancient Studies Minor?"],
+        check=lambda resp, at: is_graceful_fallback(resp),
+        category="Flat Required Courses",
+        metric="unsupported",
+    ),
+    TestCase(
+        name="Regression: Sprint 11C Year-marker requirements unaffected",
+        turns=["What courses are required for Computer Science?"],
+        check=lambda resp, at: contains_any(resp, "CP104", "CP312"),
+        category="Flat Required Courses",
+    ),
+    TestCase(
+        name="Regression: graduate program requirements unaffected",
+        turns=["Which required courses are listed for the Master of Applied Computing?"],
+        check=lambda resp, at: contains_any(resp, "CP600"),
+        category="Flat Required Courses",
+    ),
+]
+
 FACULTY_RETRIEVAL_TESTS = [
     TestCase(
         name="Economics department",
@@ -1122,6 +1165,7 @@ CATEGORIES = [
     ("Program Comparison", "Comparison", PROGRAM_COMPARISON_TESTS),
     ("Undergraduate Programs", "Undergrad Programs", UNDERGRADUATE_PROGRAM_TESTS),
     ("Undergraduate Course Requirements", "Undergrad Course Reqs", UNDERGRADUATE_COURSE_REQUIREMENT_TESTS),
+    ("Flat Required Courses", "Flat Required Courses", FLAT_REQUIRED_COURSE_TESTS),
     ("Faculty Retrieval", "Faculty", FACULTY_RETRIEVAL_TESTS),
     ("Research Topic", "Research Topic", RESEARCH_TOPIC_TESTS),
     ("Faculty Courses Taught", "Courses Taught", FACULTY_COURSES_TAUGHT_TESTS),
@@ -1147,6 +1191,7 @@ CAPABILITY_COVERAGE = [
     ("Program lookup (name/alias/acronym)", "Program Retrieval, Aliases, Comparison"),
     ("Undergraduate program discovery + descriptive retrieval", "Undergraduate Programs"),
     ("Undergraduate course requirements (CS-style, year/term grouped)", "Undergraduate Course Requirements"),
+    ("Undergraduate course requirements (flat 'Required Courses:' layout)", "Flat Required Courses"),
     ("Single-person faculty lookup", "Faculty Retrieval"),
     ("Department lookup + single-word false-positive guard", "Faculty Retrieval, Department False-Positive Prevention"),
     ("Department -> faculty list / faculty-level list", "Faculty Retrieval"),
@@ -2389,6 +2434,138 @@ def _check_undergraduate_course_requirements():
     )
 
 
+# Protects: flat "Required Courses:" undergraduate extraction (Sprint
+# 11E) - the layout identified in Sprint 11D as the safest remaining
+# deterministic shape (a <b>Required Course(s):</b> heading, the same
+# tag convention as Sprint 11C's Year N markers). Deliberately narrower
+# than the broader "flat, no-year" catalog Sprint 11D found: only pages
+# with this literal heading are extracted at all, and any matched
+# section using choice/pool language ("choose", "selected from") is
+# rejected wholesale rather than partially extracted.
+def _check_flat_required_course_extraction():
+
+    import sqlite3
+
+    sys.path.insert(0, str(SRC_DIR))
+    from retriever import structured_search
+
+    conn = sqlite3.connect(str(ROOT_DIR / "data" / "programs.db"))
+    cursor = conn.cursor()
+
+    # Successful extraction: Certificate in Criminology's real, verified
+    # required courses (confirmed live during this sprint's own
+    # investigation).
+    cursor.execute(
+        "SELECT course_code, year, term FROM program_course_requirements "
+        "WHERE program_name = 'Certificate in Criminology' ORDER BY course_code"
+    )
+    criminology_rows = cursor.fetchall()
+    criminology_codes = {row[0] for row in criminology_rows}
+
+    yield (
+        "Flat extraction: Certificate in Criminology has the real, expected required courses",
+        criminology_codes == {"CC100", "CC210", "CC290", "CC390"},
+        f"got {criminology_codes!r}"
+    )
+
+    yield (
+        "Flat extraction: year/term are left NULL for this layout (no year-based structure exists)",
+        all(year is None and term is None for _, year, term in criminology_rows),
+        f"got {criminology_rows!r}"
+    )
+
+    # Duplicate prevention: the UNIQUE(program_name, course_code)
+    # constraint holds for flat-extracted programs too.
+    cursor.execute(
+        "SELECT course_code, COUNT(*) c FROM program_course_requirements "
+        "WHERE program_name = 'Certificate in Criminology' "
+        "GROUP BY course_code HAVING c > 1"
+    )
+    duplicates = cursor.fetchall()
+
+    yield (
+        "Flat extraction: no duplicate course_code rows for the same program",
+        len(duplicates) == 0,
+        f"duplicates found: {duplicates}" if duplicates else ""
+    )
+
+    # Graceful exclusion - pool/categorical language ("selected from a
+    # List of ... Courses"): Ancient Studies Minor must yield zero rows,
+    # not a fabricated 38-course requirement list.
+    cursor.execute(
+        "SELECT COUNT(*) FROM program_course_requirements "
+        "WHERE program_name = 'Ancient Studies Minor'"
+    )
+    ancient_studies_count = cursor.fetchone()[0]
+
+    yield (
+        "Flat extraction: pool-style layout (Ancient Studies Minor) correctly excluded, zero rows",
+        ancient_studies_count == 0,
+        f"got {ancient_studies_count} rows"
+    )
+
+    # Graceful exclusion - no "Required Courses:" heading at all
+    # (Applied Mathematics Option uses "consists of the following
+    # courses:" prose instead, and Cultural Studies Minor has no bold
+    # heading whatsoever) - both must yield zero rows.
+    cursor.execute(
+        "SELECT COUNT(*) FROM program_course_requirements "
+        "WHERE program_name IN ('Applied Mathematics Option', 'Cultural Studies Minor')"
+    )
+    no_heading_count = cursor.fetchone()[0]
+
+    conn.close()
+
+    yield (
+        "Flat extraction: pages without a literal 'Required Courses' heading are correctly excluded",
+        no_heading_count == 0,
+        f"got {no_heading_count} rows"
+    )
+
+    # Retrieval: existing undergraduate requirement queries work
+    # automatically against flat-extracted data, using the unmodified
+    # Sprint 11C retrieval architecture - the exact-name phrasing avoids
+    # the same-subject disambiguation ambiguity documented since Sprint
+    # 11B (both "Certificate in Criminology" and "Diploma in
+    # Criminology" are real, separate programs sharing a bare subject).
+    result = structured_search(
+        "What is required for the Certificate in Criminology?", {}
+    )
+    yield (
+        "Flat extraction retrieval: 'What is required for the Certificate in Criminology?' resolves with real data",
+        bool(result) and "CC100" in result[0] and "CC390" in result[0],
+        f"got {result[0][:150] if result else None!r}"
+    )
+
+    result = structured_search(
+        "Does the Certificate in Criminology require CC100?", {}
+    )
+    yield (
+        "Flat extraction retrieval: 'does X require Y' resolves correctly for a flat-extracted program",
+        bool(result) and "yes" in result[0].lower(),
+        f"got {result[0] if result else None!r}"
+    )
+
+    # Regression: Sprint 11C's Year-marker retrieval is unaffected by
+    # this sprint's changes.
+    result = structured_search("What courses are required for Computer Science?", {})
+    yield (
+        "Regression check: Sprint 11C Year-marker requirement retrieval is unaffected",
+        bool(result) and "CP104" in result[0] and "CP312" in result[0],
+        f"got {result[0][:150] if result else None!r}"
+    )
+
+    # Regression: graduate requirement retrieval is still unaffected.
+    result = structured_search(
+        "Which required courses are listed for the Master of Applied Computing?", {}
+    )
+    yield (
+        "Regression check: graduate program requirement retrieval remains unaffected",
+        bool(result) and "CP600" in result[0],
+        f"got {result[0][:150] if result else None!r}"
+    )
+
+
 def _check_entity_history_and_writeback():
 
     sys.path.insert(0, str(SRC_DIR))
@@ -2533,6 +2710,7 @@ def run_data_integrity_checks():
     checks += list(_check_contextual_reference_resolution())
     checks += list(_check_program_course_requirements())
     checks += list(_check_undergraduate_course_requirements())
+    checks += list(_check_flat_required_course_extraction())
     checks += list(_check_entity_history_and_writeback())
     checks += list(_check_faculty_name_encoding())
 
