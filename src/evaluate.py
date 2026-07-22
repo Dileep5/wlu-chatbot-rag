@@ -359,6 +359,70 @@ UNDERGRADUATE_PROGRAM_TESTS = [
     ),
 ]
 
+# Protects: CS-style undergraduate course-requirement extraction and
+# retrieval (Sprint 11C), via the full chatbot. Pass criteria: the
+# required-courses and year-specific queries all resolve with real data;
+# a non-CS-style undergraduate program (a different layout entirely)
+# still answers descriptively without fabricating requirements; graduate
+# requirement retrieval remains fully answerable unchanged.
+UNDERGRADUATE_COURSE_REQUIREMENT_TESTS = [
+    TestCase(
+        name="Required courses for Computer Science (direct query)",
+        turns=["What courses are required for Computer Science?"],
+        check=lambda resp, at: (
+            contains_any(resp, "CP104", "CP312")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Undergraduate Course Requirements",
+    ),
+    TestCase(
+        name="'What is required for the X major?' phrasing",
+        turns=["What is required for the Computer Science major?"],
+        check=lambda resp, at: (
+            contains_any(resp, "CP104", "CP312")
+            and not is_off_topic_decline(resp)
+        ),
+        category="Undergraduate Course Requirements",
+    ),
+    TestCase(
+        name="Year-specific follow-up: first year, via memory",
+        turns=[
+            "Tell me about Computer Science.",
+            "What do I take in first year?",
+        ],
+        check=lambda resp, at: (
+            contains_any(resp, "CP104", "CP164")
+            and not is_clarification_response(resp)
+        ),
+        category="Undergraduate Course Requirements",
+    ),
+    TestCase(
+        name="Year-specific follow-up: Year 2, distinct from Year 1",
+        turns=[
+            "Tell me about Computer Science.",
+            "What courses are in Year 2?",
+        ],
+        check=lambda resp, at: (
+            contains_any(resp, "CP213", "CP214", "CP220")
+            and "CP104" not in resp
+        ),
+        category="Undergraduate Course Requirements",
+    ),
+    TestCase(
+        name="Unsupported undergraduate layout still answers descriptively, no fabrication",
+        turns=["What courses are required for the Biology minor?"],
+        check=lambda resp, at: is_graceful_fallback(resp),
+        category="Undergraduate Course Requirements",
+        metric="unsupported",
+    ),
+    TestCase(
+        name="Regression: graduate program requirements unaffected",
+        turns=["Which required courses are listed for the Master of Applied Computing?"],
+        check=lambda resp, at: contains_any(resp, "CP600"),
+        category="Undergraduate Course Requirements",
+    ),
+]
+
 FACULTY_RETRIEVAL_TESTS = [
     TestCase(
         name="Economics department",
@@ -1057,6 +1121,7 @@ CATEGORIES = [
     ("Program Aliases", "Aliases", PROGRAM_ALIAS_TESTS),
     ("Program Comparison", "Comparison", PROGRAM_COMPARISON_TESTS),
     ("Undergraduate Programs", "Undergrad Programs", UNDERGRADUATE_PROGRAM_TESTS),
+    ("Undergraduate Course Requirements", "Undergrad Course Reqs", UNDERGRADUATE_COURSE_REQUIREMENT_TESTS),
     ("Faculty Retrieval", "Faculty", FACULTY_RETRIEVAL_TESTS),
     ("Research Topic", "Research Topic", RESEARCH_TOPIC_TESTS),
     ("Faculty Courses Taught", "Courses Taught", FACULTY_COURSES_TAUGHT_TESTS),
@@ -1081,6 +1146,7 @@ CAPABILITY_COVERAGE = [
     ("Conversation memory (follow-up phrases)", "Conversation Memory"),
     ("Program lookup (name/alias/acronym)", "Program Retrieval, Aliases, Comparison"),
     ("Undergraduate program discovery + descriptive retrieval", "Undergraduate Programs"),
+    ("Undergraduate course requirements (CS-style, year/term grouped)", "Undergraduate Course Requirements"),
     ("Single-person faculty lookup", "Faculty Retrieval"),
     ("Department lookup + single-word false-positive guard", "Faculty Retrieval, Department False-Positive Prevention"),
     ("Department -> faculty list / faculty-level list", "Faculty Retrieval"),
@@ -2075,36 +2141,251 @@ def _check_program_course_requirements():
         f"got {result[0] if result else None!r}"
     )
 
-    # Undergraduate exclusion: an undergraduate program name should never
-    # resolve through this feature - it must fall through to whatever
-    # existing behavior handles the query instead (never a fabricated
-    # undergraduate mapping claim).
+    # Level tagging (updated for Sprint 11C): before undergraduate
+    # course-requirement extraction existed (Sprint 7D-11B), this check
+    # asserted NO undergraduate program name ever appeared in
+    # program_course_requirements at all. Sprint 11C intentionally closes
+    # that gap for CS-style programs, so the correct thing to verify now
+    # is level-tagging correctness instead: every row belonging to an
+    # undergraduate program must itself be tagged level='undergraduate'
+    # (never left over as 'graduate' or cross-contaminated), and vice
+    # versa for graduate rows.
     conn = sqlite3.connect(str(ROOT_DIR / "data" / "programs.db"))
     cursor = conn.cursor()
+
     cursor.execute(
-        "SELECT DISTINCT program_name FROM program_course_requirements"
+        "SELECT DISTINCT program_name FROM program_course_requirements "
+        "WHERE level = 'undergraduate'"
     )
-    requirement_program_names = {row[0] for row in cursor.fetchall()}
+    tagged_undergrad_names = {row[0] for row in cursor.fetchall()}
+
     cursor.execute(
-        "SELECT program_name FROM programs WHERE level = 'undergraduate'"
+        "SELECT DISTINCT program_name FROM program_course_requirements "
+        "WHERE level = 'graduate'"
     )
+    tagged_graduate_names = {row[0] for row in cursor.fetchall()}
+
+    cursor.execute("SELECT program_name FROM programs WHERE level = 'undergraduate'")
     undergrad_names = {row[0] for row in cursor.fetchall()}
+
+    cursor.execute("SELECT program_name FROM programs WHERE level = 'graduate'")
+    graduate_names = {row[0] for row in cursor.fetchall()}
+
     conn.close()
 
     yield (
-        "Undergraduate exclusion: no undergraduate program name in program_course_requirements",
-        len(undergrad_names & requirement_program_names) == 0,
-        f"overlap: {undergrad_names & requirement_program_names!r}"
+        "Level tagging: undergraduate program_course_requirements rows are real undergraduate programs, correctly tagged",
+        len(tagged_undergrad_names) > 0
+        and tagged_undergrad_names.issubset(undergrad_names)
+        and tagged_undergrad_names.isdisjoint(graduate_names),
+        f"got {len(tagged_undergrad_names)} tagged undergraduate program names"
     )
 
+    yield (
+        # issubset, not equality: one graduate program (Master of Social
+        # Work) has never had requirement rows since Sprint 7D, predating
+        # any of this sprint's changes - confirmed against a pre-Sprint-
+        # 11C backup. What matters here is that no graduate row was lost
+        # or mistagged by the undergraduate migration, not that every
+        # graduate program happens to have requirement data.
+        "Level tagging: graduate program_course_requirements rows are unaffected by the undergraduate migration",
+        tagged_graduate_names.issubset(graduate_names) and len(tagged_graduate_names) >= 16,
+        f"tagged={len(tagged_graduate_names)}, expected>=16 (of {len(graduate_names)} graduate programs)"
+    )
+
+    # A non-CS-style undergraduate program (Business Administration -
+    # not one of the Year-N pages this sprint supports) must still never
+    # produce a fabricated requirement claim - the exact graceful-
+    # degradation guarantee Sprint 11C requires for unsupported layouts.
     result = structured_search(
         "Does the Honours Bachelor of Business Administration require CP104?",
         {}
     )
     yield (
-        "Undergraduate exclusion: no fabricated undergraduate program-requirement claim",
+        "Undergraduate exclusion: no fabricated requirement claim for an unsupported (non-CS-style) program",
         not bool(result) or "required course" not in result[0].lower(),
         f"got {result[0] if result else None!r}"
+    )
+
+
+# Protects: CS-style undergraduate course-requirement extraction and
+# retrieval (Sprint 11C) - <b>Year N</b> markers with course.php-linked
+# course codes, deliberately scoped to that one shape only (not History-
+# style credit/category prose, not joint-program HTML tables). Checked
+# via direct structured_search() calls (not AppTest) since the exact
+# year/term grouping and real course codes are what's being verified.
+def _check_undergraduate_course_requirements():
+
+    import sqlite3
+
+    sys.path.insert(0, str(SRC_DIR))
+    from retriever import structured_search, create_memory
+
+    conn = sqlite3.connect(str(ROOT_DIR / "data" / "programs.db"))
+    cursor = conn.cursor()
+
+    # Successful extraction: Honours BSc Computer Science's real,
+    # verified Year 1 requirements (confirmed live during this sprint's
+    # own investigation).
+    cursor.execute(
+        "SELECT course_code FROM program_course_requirements "
+        "WHERE program_name = 'Honours BSc Computer Science' AND year = 1"
+    )
+    year1_codes = {row[0] for row in cursor.fetchall()}
+
+    yield (
+        "Undergraduate extraction: Honours BSc Computer Science Year 1 has the real, expected courses",
+        {"CP104", "CP164", "MA102", "MA103"}.issubset(year1_codes),
+        f"got {year1_codes!r}"
+    )
+
+    # The "recommended" elective exclusion (Sprint 11C) - HI132 is
+    # mentioned as a recommended elective pairing in CP312's own Year 1
+    # section, not a genuine requirement, and must not be stored as one.
+    yield (
+        "Undergraduate extraction: a 'recommended' elective mention (HI132) is correctly excluded, not stored as required",
+        "HI132" not in year1_codes,
+        f"got {year1_codes!r}"
+    )
+
+    # Year grouping: Year 1 and Year 3 are real, distinct, non-
+    # overlapping sets for the same program.
+    cursor.execute(
+        "SELECT course_code FROM program_course_requirements "
+        "WHERE program_name = 'Honours BSc Computer Science' AND year = 3"
+    )
+    year3_codes = {row[0] for row in cursor.fetchall()}
+
+    yield (
+        "Undergraduate extraction: Year grouping keeps Year 1 and Year 3 courses correctly separate",
+        "CP312" in year3_codes and "CP312" not in year1_codes and "CP104" not in year3_codes,
+        f"year1={year1_codes!r}, year3={year3_codes!r}"
+    )
+
+    # Term grouping: MA102/MA103 have real, distinct terms; most
+    # courses (e.g. CP104) have no term at all - not every course in a
+    # CS-style page states one, and that absence must stay NULL, not a
+    # fabricated guess.
+    cursor.execute(
+        "SELECT course_code, term FROM program_course_requirements "
+        "WHERE program_name = 'Honours BSc Computer Science' AND course_code IN ('MA102', 'MA103', 'CP104')"
+    )
+    terms = dict(cursor.fetchall())
+
+    yield (
+        "Undergraduate extraction: term grouping captures real terms when explicitly stated, and leaves it blank otherwise",
+        terms.get("MA102") == "Fall" and terms.get("MA103") == "Winter" and terms.get("CP104") is None,
+        f"got {terms!r}"
+    )
+
+    # Duplicate prevention: the UNIQUE(program_name, course_code)
+    # constraint holds - no course code appears more than once for the
+    # same program, even though the raw source text mentions MA103
+    # multiple times across alternative Fall/Winter paths.
+    cursor.execute(
+        "SELECT course_code, COUNT(*) c FROM program_course_requirements "
+        "WHERE program_name = 'Honours BSc Computer Science' "
+        "GROUP BY course_code HAVING c > 1"
+    )
+    duplicates = cursor.fetchall()
+
+    yield (
+        "Undergraduate extraction: no duplicate course_code rows for the same program",
+        len(duplicates) == 0,
+        f"duplicates found: {duplicates}" if duplicates else ""
+    )
+
+    # Unsupported layout - History-style: Year N markers exist on the
+    # page, but its content is credit/category prose with no linkable
+    # course codes inside them - correctly yields zero stored rows,
+    # never a partial or fabricated extraction.
+    cursor.execute(
+        "SELECT COUNT(*) FROM program_course_requirements "
+        "WHERE program_name = 'Honours BA History'"
+    )
+    history_direct_count = cursor.fetchone()[0]
+
+    conn.close()
+
+    # (Honours BA History has a duplicate-URL sibling with one
+    # incidental Year 4 course, YC200, from a different campus variant
+    # sharing the same name - a known, narrow limitation of the
+    # program_name-keyed schema documented in this sprint's report, not
+    # a violation of the History-style exclusion itself. What matters
+    # here is that no *bulk* credit/category data was fabricated - at
+    # most a couple of incidental rows, not dozens of area-requirement
+    # course codes.)
+    yield (
+        "Undergraduate extraction: History-style (credit/category) layout yields no bulk fabricated data",
+        history_direct_count <= 2,
+        f"got {history_direct_count} rows for Honours BA History"
+    )
+
+    # Unsupported layout - joint-program HTML table: no <b>Year N>
+    # markers at all on this page shape, so no extraction is attempted -
+    # the question correctly falls through past the (rejected)
+    # requirement lookup to search_program()'s plain descriptive answer
+    # instead (requirement 4: "return descriptive program information
+    # only... do not fabricate requirements"), rather than either a
+    # hard "no data" message or - the bug this guards against - silently
+    # borrowing a same-subject sibling program's real course list.
+    result = structured_search(
+        "What courses are required for the Honours BSc in Computer "
+        "Science and Honours Bachelor of Business Administration program?",
+        {}
+    )
+    yield (
+        "Undergraduate extraction: joint-program HTML-table layout falls back to descriptive info, never fabricated/borrowed requirements",
+        bool(result)
+        and "Program:" in result[0]
+        and "Required courses listed" not in result[0],
+        f"got {result[0][:150] if result else None!r}"
+    )
+
+    # Retrieval: the required example queries, end-to-end through
+    # structured_search() including the memory-based year follow-ups.
+    result = structured_search("What courses are required for Computer Science?", {})
+    yield (
+        "Undergraduate retrieval: 'What courses are required for Computer Science?' resolves with real data",
+        bool(result) and "CP104" in result[0] and "CP312" in result[0],
+        f"got {result[0][:150] if result else None!r}"
+    )
+
+    result = structured_search("What is required for the Computer Science major?", {})
+    yield (
+        "Undergraduate retrieval: 'What is required for the Computer Science major?' resolves with real data",
+        bool(result) and "CP104" in result[0],
+        f"got {result[0][:150] if result else None!r}"
+    )
+
+    mem = create_memory()
+    mem["turn_count"] = 1
+    structured_search("Tell me about Computer Science.", mem)
+    mem["turn_count"] = 2
+    result = structured_search("What do I take in first year?", mem)
+    yield (
+        "Undergraduate retrieval: 'What do I take in first year?' resolves via memory after establishing the program",
+        bool(result) and "CP104" in result[0] and "Year 1" in result[0],
+        f"got {result[0][:150] if result else None!r}"
+    )
+
+    mem["turn_count"] = 3
+    result = structured_search("What courses are in Year 2?", mem)
+    yield (
+        "Undergraduate retrieval: 'What courses are in Year 2?' resolves via memory, distinct from Year 1",
+        bool(result) and "CP213" in result[0] and "CP104" not in result[0],
+        f"got {result[0][:150] if result else None!r}"
+    )
+
+    # Regression: graduate requirement retrieval is completely unaffected.
+    result = structured_search(
+        "Which required courses are listed for the Master of Applied Computing?",
+        {}
+    )
+    yield (
+        "Regression check: graduate program requirement retrieval is unaffected",
+        bool(result) and "CP600" in result[0],
+        f"got {result[0][:150] if result else None!r}"
     )
 
 
@@ -2251,6 +2532,7 @@ def run_data_integrity_checks():
     checks += list(_check_beggar_recovered())
     checks += list(_check_contextual_reference_resolution())
     checks += list(_check_program_course_requirements())
+    checks += list(_check_undergraduate_course_requirements())
     checks += list(_check_entity_history_and_writeback())
     checks += list(_check_faculty_name_encoding())
 

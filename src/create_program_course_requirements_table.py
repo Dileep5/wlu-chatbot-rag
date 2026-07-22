@@ -25,6 +25,16 @@ cursor.execute("DROP TABLE IF EXISTS program_course_requirements")
 # programs table whose matching rows had just been deleted) would
 # recur immediately if undergraduate reload tried to scope its DELETE
 # through such a join instead.
+#
+# `year`/`term` (Sprint 11C) hold the academic year (1-4) and term
+# (Fall/Winter/Spring, when explicitly stated) a course belongs to for
+# undergraduate "Year N" style programs - always NULL for graduate rows,
+# which have no such structure. UNIQUE(program_name, course_code) still
+# applies per program regardless of year/term, consistent with the
+# existing "collapse multiple option-specific mentions into one row"
+# simplification - a course mentioned under more than one term/option
+# within the same program is stored once, at whichever mention is
+# encountered first.
 cursor.execute("""
 CREATE TABLE program_course_requirements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,6 +43,8 @@ CREATE TABLE program_course_requirements (
     requirement_type TEXT NOT NULL,
     raw_text TEXT,
     level TEXT NOT NULL DEFAULT 'graduate',
+    year INTEGER,
+    term TEXT,
     UNIQUE(program_name, course_code)
 )
 """)

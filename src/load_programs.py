@@ -2,7 +2,7 @@ import csv
 import re
 import sqlite3
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 HEADERS = {
     "User-Agent": (
@@ -338,6 +338,154 @@ def _classify_program_type(program_name):
     return "major"
 
 
+# Sprint 11C: CS-style undergraduate program pages ("Honours BSc
+# Computer Science" and similar) organize required courses under
+# <b>Year N</b> markers, with course codes as course.php hyperlinks
+# interspersed in prose - confirmed live during Sprint 11A/11C
+# investigation, structurally distinct from the two other undergraduate
+# shapes found (History-style credit/category prose with no course
+# links inside its own "Year N" sections, and joint-program HTML
+# tables) - this sprint deliberately handles only this one shape, per
+# the explicit scope. A "recommended" course mentioned as an elective
+# suggestion (e.g. "2.5 elective credits - HI132 recommended") is
+# excluded - it's advice, not a requirement, and treating it as one
+# would be a real fabrication risk (confirmed live: HI132 appears
+# hyperlinked in CP312's own Year 1 section this exact way).
+_YEAR_MARKER_TEXT_PATTERN = re.compile(r"^Year\s+(\d+)", re.IGNORECASE)
+_TERM_TEXT_PATTERN = re.compile(r"\b(Fall|Winter|Spring)\b", re.IGNORECASE)
+_RECOMMENDED_TEXT_PATTERN = re.compile(r"\brecommended\b", re.IGNORECASE)
+
+
+def _tokenize_year_content(program_soup):
+
+    content = program_soup.find("div", class_="content")
+
+    if not content:
+        return []
+
+    tokens = []
+
+    for element in content.descendants:
+
+        # "Program Regulations" and similar sections (progression GPA
+        # rules, exclusions, campus notes) start here - not part of the
+        # year-by-year course breakdown, and out of scope this sprint.
+        if (
+            isinstance(element, Tag)
+            and "subanchor" in (element.get("class") or [])
+        ):
+            break
+
+        if isinstance(element, Tag) and element.name == "b":
+
+            year_match = _YEAR_MARKER_TEXT_PATTERN.match(
+                element.get_text(strip=True)
+            )
+
+            if year_match:
+                tokens.append(("year", int(year_match.group(1))))
+
+            continue
+
+        if (
+            isinstance(element, Tag)
+            and element.name == "a"
+            and "course.php" in (element.get("href") or "")
+        ):
+
+            # Glossary-definition links (e.g. "elective") are not course
+            # references at all.
+            if "glossaryTerm" in (element.get("class") or []):
+                continue
+
+            code_match = _COURSE_CODE_PATTERN.search(
+                element.get_text(strip=True).upper()
+            )
+
+            if code_match:
+                tokens.append(("course", code_match.group()))
+
+            continue
+
+        if isinstance(element, NavigableString):
+
+            # Only text not already captured structurally via its
+            # parent <a>/<b> above.
+            if element.parent and element.parent.name in ("a", "b"):
+                continue
+
+            text = str(element)
+
+            if text.strip():
+                tokens.append(("text", text))
+
+    return tokens
+
+
+def _extract_year_based_course_refs(program_soup):
+    """Returns (is_year_marker_page, [(year, term, course_code), ...]).
+
+    is_year_marker_page is True whenever at least one <b>Year N</b>
+    marker was found at all - callers should treat this as "this page
+    uses the supported CS-style shape" even when the resulting course
+    list is empty (a program with Year N headings but no hyperlinked
+    courses inside them, like History's credit/category style, simply
+    has nothing extractable - correctly zero rows, not a fabrication;
+    the caller doesn't need to tell that apart from "not this shape at
+    all" since both produce the same, correct outcome: no rows stored).
+    """
+
+    tokens = _tokenize_year_content(program_soup)
+
+    if not any(kind == "year" for kind, _ in tokens):
+        return False, []
+
+    results = []
+    current_year = None
+    seen_in_year = set()
+
+    for index, (kind, value) in enumerate(tokens):
+
+        if kind == "year":
+            current_year = value
+            continue
+
+        if kind != "course" or current_year is None:
+            continue
+
+        # Look ahead through the immediately-following text only (up to
+        # the next course/year token) for a term keyword and the
+        # "recommended" exclusion signal - deliberately local/structural,
+        # not a full parse of the surrounding sentence.
+        lookahead_parts = []
+
+        for next_kind, next_value in tokens[index + 1:]:
+
+            if next_kind in ("course", "year"):
+                break
+
+            lookahead_parts.append(next_value)
+
+        lookahead_text = "".join(lookahead_parts)
+
+        if _RECOMMENDED_TEXT_PATTERN.search(lookahead_text):
+            continue
+
+        key = (current_year, value)
+
+        if key in seen_in_year:
+            continue
+
+        seen_in_year.add(key)
+
+        term_match = _TERM_TEXT_PATTERN.search(lookahead_text)
+        term = term_match.group(1).capitalize() if term_match else None
+
+        results.append((current_year, term, value))
+
+    return True, results
+
+
 def load_undergraduate_programs(
     program_links_csv="outputs/undergraduate_program_links.csv"
 ):
@@ -351,10 +499,20 @@ def load_undergraduate_programs(
     cursor = conn.cursor()
 
     # Level-scoped, mirroring the existing pattern used for graduate
-    # reloads above - never touches graduate rows, and (Sprint 11B fix)
-    # program_course_requirements is untouched entirely here since
-    # course-requirement extraction is out of scope this sprint.
+    # reloads above - never touches graduate rows. Sprint 11C puts the
+    # level-scoped reload fix (Sprint 11B) to actual use for the first
+    # time: this DELETE only ever touches undergraduate rows here,
+    # leaving all 171 graduate program_course_requirements rows
+    # completely undisturbed.
     cursor.execute("DELETE FROM programs WHERE level = 'undergraduate'")
+    cursor.execute(
+        "DELETE FROM program_course_requirements WHERE level = 'undergraduate'"
+    )
+
+    year_marker_pages = 0
+    programs_with_requirements = 0
+    requirement_rows_inserted = 0
+    unsupported_pages = 0
 
     with open(program_links_csv, newline="", encoding="utf-8") as file:
 
@@ -447,6 +605,43 @@ def load_undergraduate_programs(
 
                 print("Inserted")
 
+                # Sprint 11C: CS-style Year N course-requirement
+                # extraction, scoped explicitly to that one shape - see
+                # _extract_year_based_course_refs()'s docstring for why
+                # History-style and joint-table pages both correctly
+                # yield zero rows here without needing to be told apart
+                # from "not this shape at all".
+                is_year_marker_page, course_refs = _extract_year_based_course_refs(soup)
+
+                if is_year_marker_page:
+                    year_marker_pages += 1
+
+                if course_refs:
+
+                    programs_with_requirements += 1
+
+                    for year, term, course_code in course_refs:
+
+                        cursor.execute("""
+                        INSERT OR IGNORE INTO program_course_requirements
+                        (program_name, course_code, requirement_type, raw_text, level, year, term)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            program_name,
+                            course_code,
+                            "required",
+                            None,
+                            "undergraduate",
+                            year,
+                            term,
+                        ))
+
+                        if cursor.rowcount:
+                            requirement_rows_inserted += 1
+
+                elif not is_year_marker_page:
+                    unsupported_pages += 1
+
             except Exception as e:
 
                 print("Error:", e)
@@ -455,6 +650,17 @@ def load_undergraduate_programs(
     conn.close()
 
     print("\nDone!")
+    print(f"Year-marker pages detected: {year_marker_pages}")
+    print(f"Programs with extracted requirements: {programs_with_requirements}")
+    print(f"Requirement rows inserted: {requirement_rows_inserted}")
+    print(f"Pages with no Year N markers at all (unsupported shape): {unsupported_pages}")
+
+    return {
+        "year_marker_pages": year_marker_pages,
+        "programs_with_requirements": programs_with_requirements,
+        "requirement_rows_inserted": requirement_rows_inserted,
+        "unsupported_pages": unsupported_pages,
+    }
 
 
 if __name__ == "__main__":

@@ -689,6 +689,51 @@ _PROGRAM_REQUIRED_COURSES_PATTERN = re.compile(
     r"\brequired\s+courses?\b.*?\bfor\s+(?:the\s+)?(.+)", re.IGNORECASE
 )
 
+# Sprint 11C: undergraduate-style phrasings of the same "list required
+# courses" question, with the words in a different order than the
+# graduate-derived pattern above expects ("courses required for X"
+# rather than "required courses for X", and "what is required for X"
+# with no "course(s)" word at all). Both map to the same handler.
+_COURSES_REQUIRED_FOR_PATTERN = re.compile(
+    r"\bcourses?\s+(?:are\s+|is\s+)?required\s+for\s+(?:the\s+)?(.+)",
+    re.IGNORECASE
+)
+_WHAT_IS_REQUIRED_PATTERN = re.compile(
+    r"\bwhat(?:'s|\s+is)\s+required\s+for\s+(?:the\s+)?(.+)",
+    re.IGNORECASE
+)
+
+# Year-specific lookup (Sprint 11C) - a genuinely new query shape with
+# no graduate equivalent (graduate program_course_requirements has no
+# year concept at all). Accepts both numeric ("Year 2") and ordinal-word
+# ("first year"/"1st year") phrasing, since real usage naturally mixes
+# both ("What courses are in Year 2?" vs "What do I take in first
+# year?").
+_YEAR_WORD_TO_NUMBER = {
+    "first": 1, "1st": 1,
+    "second": 2, "2nd": 2,
+    "third": 3, "3rd": 3,
+    "fourth": 4, "4th": 4,
+}
+
+_YEAR_REFERENCE_PATTERN = re.compile(
+    r"\byear\s+(\d+)\b|\b(first|second|third|fourth|1st|2nd|3rd|4th)\s+year\b",
+    re.IGNORECASE
+)
+
+
+def _extract_year_number(text):
+
+    match = _YEAR_REFERENCE_PATTERN.search(text)
+
+    if not match:
+        return None
+
+    if match.group(1):
+        return int(match.group(1))
+
+    return _YEAR_WORD_TO_NUMBER.get(match.group(2).lower())
+
 
 def _all_requirement_program_names():
 
@@ -706,13 +751,76 @@ def _all_requirement_program_names():
     return names
 
 
+def _all_program_names():
+
+    conn = sqlite3.connect("data/programs.db")
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT DISTINCT program_name FROM programs")
+
+    names = [row[0] for row in cursor.fetchall()]
+
+    conn.close()
+
+    return names
+
+
 def _match_program_name(text):
 
     text_lower = text.lower()
 
-    for name in sorted(_all_requirement_program_names(), key=len, reverse=True):
+    names = _all_requirement_program_names()
+
+    # Tier 1: exact stored-name substring match (unchanged) - the
+    # stored name appears verbatim somewhere in the user's text. Works
+    # for graduate names, which users tend to type out close to in full
+    # ("Master of Applied Computing").
+    for name in sorted(names, key=len, reverse=True):
 
         if name.lower() in text_lower:
+            return name
+
+    # Guard (Sprint 11C): if the user's text already names a DIFFERENT,
+    # more specific real program that simply has no structured
+    # requirement data of its own (e.g. a joint-program HTML-table page,
+    # out of scope this sprint), the bare-subject fallback below must
+    # not instead resolve to an unrelated sibling program that only
+    # happens to share the same bare subject words. Confirmed live:
+    # "the Honours BSc in Computer Science and Honours Bachelor of
+    # Business Administration program" was incorrectly resolving to the
+    # plain "Honours BSc Computer Science" major, since the joint
+    # program (having no requirement rows) was never even a Tier 1
+    # candidate, letting Tier 2 match its unrelated sibling instead.
+    for name in sorted(_all_program_names(), key=len, reverse=True):
+
+        if name.lower() in text_lower and name not in names:
+            return None
+
+    # Tier 2: bare-subject fallback (Sprint 11C) - mirrors
+    # search_program()'s own Tier 2b (Sprint 11B). Undergraduate program
+    # titles are consistently degree-prefixed ("Honours BSc Computer
+    # Science"), but users just name the subject ("Computer Science
+    # required courses") - the STORED name is longer than what the user
+    # typed, the opposite direction from Tier 1, so the stored name's
+    # bare subject (degree prefix stripped) is checked as a substring of
+    # the user's text instead. Unlike search_program()'s Tier 2b, no
+    # additional single-word signal-word guard is needed here: every
+    # caller of _match_program_name() is only ever reached through a
+    # regex that already requires "require(s)"/"required" to be present
+    # in the original question (_PROGRAM_REQUIRES_COURSE_PATTERN,
+    # _PROGRAM_REQUIRED_COURSES_PATTERN and friends) - that's already a
+    # strong, unambiguous academic-context signal on its own, so
+    # "Biology required courses" resolves without needing a second
+    # qualifier the way a bare "Tell me about Biology" would.
+    for name in sorted(names, key=len, reverse=True):
+
+        subject = _strip_to_subject(name.lower())
+
+        if (
+            len(subject) >= 3
+            and subject in text_lower
+            and not _subject_match_degree_conflicts(name, text_lower)
+        ):
             return name
 
     return None
@@ -867,10 +975,78 @@ def _handle_program_required_courses(program_phrase, memory=None):
     )
 
 
+def _handle_program_year_courses(program_name, year, memory=None):
+
+    conn = sqlite3.connect("data/programs.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT DISTINCT course_code, term FROM program_course_requirements "
+        "WHERE program_name = ? AND year = ? ORDER BY course_code",
+        (program_name, year)
+    )
+
+    rows = cursor.fetchall()
+
+    conn.close()
+
+    if not rows:
+        _record_entity(
+            memory, "program", program_name, program_name,
+            "search_program_course_requirements",
+        )
+        return (
+            f"No structured Year {year} course data is available for "
+            f"{program_name}.",
+            None
+        )
+
+    _record_entity_list(
+        memory, "course", [(code, code) for code, term in rows],
+        "search_program_course_requirements",
+    )
+    _record_entity(
+        memory, "program", program_name, program_name,
+        "search_program_course_requirements",
+    )
+
+    lines = "\n".join(
+        f"- {code} ({term})" if term else f"- {code}"
+        for code, term in rows
+    )
+
+    return (
+        f"Year {year} courses listed for {program_name}:\n{lines}\n"
+        f"(This reflects explicitly listed required courses only - "
+        f"electives and categorical requirements aren't included.)",
+        None
+    )
+
+
 def search_program_course_requirements(question, memory=None):
 
     if not PROGRAM_COURSE_REQUIREMENTS_READY:
         return None
+
+    # Year-specific lookup (Sprint 11C), checked first as the more
+    # specific shape. Uniquely supports resolving the program from
+    # conversation memory when the question doesn't name one at all
+    # ("What do I take in first year?" only makes sense as a follow-up
+    # to an already-established program) - unlike every other pattern
+    # in this function, which requires the program to be named directly.
+    year_number = _extract_year_number(question)
+
+    if year_number is not None:
+
+        program_name = _match_program_name(question)
+
+        if not program_name:
+            program_name = _resolve_typed_value(memory, "program")
+
+        if program_name:
+            result = _handle_program_year_courses(program_name, year_number, memory)
+            if result:
+                return result
 
     match = _REVERSE_PROGRAM_REQUIREMENT_PATTERN.search(question)
 
@@ -891,6 +1067,20 @@ def search_program_course_requirements(question, memory=None):
             return result
 
     match = _PROGRAM_REQUIRED_COURSES_PATTERN.search(question)
+
+    if match:
+        result = _handle_program_required_courses(match.group(1), memory)
+        if result:
+            return result
+
+    match = _COURSES_REQUIRED_FOR_PATTERN.search(question)
+
+    if match:
+        result = _handle_program_required_courses(match.group(1), memory)
+        if result:
+            return result
+
+    match = _WHAT_IS_REQUIRED_PATTERN.search(question)
 
     if match:
         result = _handle_program_required_courses(match.group(1), memory)
@@ -1371,10 +1561,43 @@ def _strip_filler(text):
 # degree-aware Tier 2 match fails (search_program()).
 _DEGREE_TOKEN_PATTERN = re.compile(r"\b(?:bach|mast|doc|dip)\b")
 
+# Capturing variant of the same pattern, used only to extract which
+# degree-level token(s) are present (for the cross-level conflict guard
+# below) rather than to strip them.
+_DEGREE_TOKEN_CAPTURE_PATTERN = re.compile(r"\b(bach|mast|doc|dip)\b")
+
 
 def _strip_to_subject(text):
 
     return re.sub(r"\s+", " ", _DEGREE_TOKEN_PATTERN.sub(" ", _strip_filler(text))).strip()
+
+
+def _mentioned_degree_tokens(text):
+
+    return set(_DEGREE_TOKEN_CAPTURE_PATTERN.findall(_strip_filler(text.lower())))
+
+
+# Bare-subject matching alone loses degree-level information entirely -
+# confirmed live during Sprint 11C verification: "Does the Honours
+# Bachelor of Business Administration require CP104?" incorrectly
+# matched the unrelated graduate "Master of Business Administration"
+# program, since both reduce to the identical bare subject "business
+# administration". A bare-subject match is rejected whenever the
+# CANDIDATE program's own degree-level token is explicitly contradicted
+# by a DIFFERENT degree-level token the user's own text mentions -
+# "Bachelor"/"BSc"/"BA" in the question should never resolve to a
+# "Master of..." program, and vice versa. A question that mentions no
+# degree level at all ("Computer Science") stays unaffected - only an
+# explicit, conflicting mention blocks the match.
+def _subject_match_degree_conflicts(candidate_name, text_lower):
+
+    candidate_tokens = _mentioned_degree_tokens(candidate_name)
+    text_tokens = _mentioned_degree_tokens(text_lower)
+
+    if not candidate_tokens or not text_tokens:
+        return False
+
+    return candidate_tokens.isdisjoint(text_tokens)
 
 
 # Bare single-word subjects ("Philosophy", "Music", "History", "English",
@@ -1510,11 +1733,49 @@ def search_program(question, memory=None):
     # docstring. Tried only after the degree-aware Tier 2 match above
     # fails. A bare subject name is often shared by several program-type
     # variants of the same subject (major, minor, concentration,
-    # combined...), so this is checked in two passes: "major"-type rows
-    # first, so a bare subject name resolves to the plain major by
-    # default (per Sprint 11A's investigation recommendation) rather
-    # than an arbitrarily-ordered concentration/option/minor variant;
-    # any other type only as a second-pass fallback.
+    # combined...), so this is checked in three passes: "major"-type
+    # rows that also have real, structured course-requirement data
+    # first (Sprint 11C - among several same-subject major variants,
+    # e.g. an Honours BA and an Honours BSc version of Computer Science,
+    # prefer whichever one can actually answer a course-requirement
+    # follow-up, so establishing a program via a bare subject name and
+    # then asking "what do I take in first year?" resolves to a program
+    # with real data rather than an arbitrarily-ordered sibling that has
+    # none); "major"-type rows generally next, so a bare subject name
+    # still resolves to a plain major by default (per Sprint 11A's
+    # investigation recommendation) even when none of the candidates
+    # have course-requirement data; any other type only as a last-resort
+    # fallback.
+    requirement_program_names = None
+
+    for row in rows:
+
+        program_type = row["program_type"] if "program_type" in row.keys() else None
+        subject = _strip_to_subject(row[0].lower())
+
+        if not (
+            len(subject) >= 3
+            and subject in normalized_question
+            and _subject_match_is_safe(subject, question_lower)
+            and not _subject_match_degree_conflicts(row[0], question_lower)
+        ):
+            continue
+
+        if program_type != "major":
+            continue
+
+        if requirement_program_names is None:
+            requirement_program_names = set(_all_requirement_program_names())
+
+        if row[0] not in requirement_program_names:
+            continue
+
+        if memory is not None:
+            memory["last_program"] = row[0]
+            _record_entity(memory, "program", row[0], row[0], "search_program")
+
+        return row
+
     for preferred_types in (("major",), None):
 
         for row in rows:
@@ -1530,6 +1791,7 @@ def search_program(question, memory=None):
                 len(subject) >= 3
                 and subject in normalized_question
                 and _subject_match_is_safe(subject, question_lower)
+                and not _subject_match_degree_conflicts(row[0], question_lower)
             ):
 
                 if memory is not None:
