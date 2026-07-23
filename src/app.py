@@ -14,6 +14,7 @@ from retriever import (
 )
 from conversation import is_conversation
 from domain_guard import is_wlu_related
+from renderer import render_response
 
 # -----------------------------
 # Configuration
@@ -283,14 +284,11 @@ for msg in st.session_state.messages:
         msg["role"]
     ):
 
-        st.markdown(
-            msg["content"]
+        render_response(
+            msg.get("response_type"),
+            msg["content"],
+            msg.get("source"),
         )
-
-        if "source" in msg and msg["source"]:
-            st.markdown(
-                f"**Source:** {msg['source']}"
-            )
 
 
 # -----------------------------
@@ -348,6 +346,7 @@ if query:
             )
 
             source = None
+            response_type = None
 
         # normal conversation
         elif is_conversation(query):
@@ -357,6 +356,7 @@ if query:
             )
 
             source = None
+            response_type = None
 
         # grounded structured match (course/program/department) - a real
         # match is proof the query is in-domain, so it bypasses the
@@ -410,6 +410,7 @@ if query:
 
                 answer = contextual[1]
                 source = None
+                response_type = None
 
         # out-of-domain (memory follow-ups always bypass this check)
         elif (
@@ -419,6 +420,7 @@ if query:
 
             answer = OFF_TOPIC_MESSAGE
             source = None
+            response_type = None
 
         # WLU retrieval
         else:
@@ -442,21 +444,18 @@ if query:
             "assistant"
         ):
 
-            st.markdown(
-                answer
+            render_response(
+                response_type,
+                answer,
+                source
             )
-
-            if source:
-                st.markdown(
-                    f"**Source:** "
-                    f"{source}"
-                )
 
         st.session_state.messages.append(
             {
                 "role": "assistant",
                 "content": answer,
-                "source": source
+                "source": source,
+                "response_type": response_type
             }
         )
 
