@@ -648,25 +648,33 @@ def search_course_prerequisites(question, memory=None):
     if not COURSE_PREREQUISITE_REFS_READY:
         return None
 
+    # Phase 12C: every path below is already complete, final-answer text
+    # (built once, verified across Sprints 7B/9B/9C) - tagged "prerequisite"
+    # here, at the single point all four handlers funnel through, rather
+    # than touching each handler's own return statements.
     match = _REVERSE_PREREQUISITE_PATTERN.search(question)
 
     if match:
-        return _handle_reverse_prerequisite_lookup(match.group(1), memory)
+        result = _handle_reverse_prerequisite_lookup(match.group(1), memory)
+        return (*result, "prerequisite") if result else None
 
     if _NO_PREREQUISITE_PATTERN.search(question):
-        return _handle_no_prerequisite_courses(memory)
+        result = _handle_no_prerequisite_courses(memory)
+        return (*result, "prerequisite") if result else None
 
     match = _REQUIRES_RELATIONSHIP_PATTERN.search(question)
 
     if match:
-        return _handle_requires_relationship(
+        result = _handle_requires_relationship(
             match.group(1), match.group(2), memory
         )
+        return (*result, "prerequisite") if result else None
 
     match = _DIRECT_PREREQUISITE_PATTERN.search(question)
 
     if match:
-        return _handle_direct_prerequisite_lookup(match.group(1), memory)
+        result = _handle_direct_prerequisite_lookup(match.group(1), memory)
+        return (*result, "prerequisite") if result else None
 
     return None
 
@@ -826,6 +834,32 @@ def _match_program_name(text):
     return None
 
 
+# Phase 12C: program_course_requirements holds both graduate (Sprint 7C)
+# and undergraduate (Sprint 11C/11E) rows in one table, distinguished by
+# `level` - this reads that column directly rather than guessing from
+# program_name shape, so the deterministic-response tag always matches
+# the data's own real classification.
+def _program_requirement_level(program_name):
+
+    conn = sqlite3.connect("data/programs.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT level FROM program_course_requirements "
+        "WHERE program_name = ? LIMIT 1",
+        (program_name,)
+    )
+
+    row = cursor.fetchone()
+
+    conn.close()
+
+    if row and row[0] == "undergraduate":
+        return "undergraduate_requirements"
+
+    return "graduate_requirements"
+
+
 def _handle_reverse_program_requirement_lookup(captured, memory=None):
 
     course_code = _extract_course_code(captured)
@@ -854,7 +888,8 @@ def _handle_reverse_program_requirement_lookup(captured, memory=None):
         return (
             f"No graduate program was found that lists {course_code} "
             f"as a required course, based on available structured data.",
-            None
+            None,
+            "graduate_requirements"
         )
 
     _record_entity_list(
@@ -868,9 +903,14 @@ def _handle_reverse_program_requirement_lookup(captured, memory=None):
 
     lines = "\n".join(f"- {name}" for name in programs)
 
+    # Phase 12C: this reverse lookup's own wording has always said
+    # "Graduate programs..." (Sprint 7D), so it's tagged that way
+    # unconditionally here too, rather than re-checking each returned
+    # program's individual level.
     return (
         f"Graduate programs that require {course_code}:\n{lines}",
-        None
+        None,
+        "graduate_requirements"
     )
 
 
@@ -908,11 +948,14 @@ def _handle_program_requires_course(program_phrase, course_phrase, memory=None):
         "search_program_course_requirements",
     )
 
+    response_type = _program_requirement_level(program_name)
+
     if found:
         return (
             f"Yes, {program_name} lists {course_code} as a required "
             f"course.",
-            None
+            None,
+            response_type
         )
 
     return (
@@ -920,7 +963,8 @@ def _handle_program_requires_course(program_phrase, course_phrase, memory=None):
         f"{program_name}, based on available structured data. This "
         f"only covers explicitly required courses - electives and "
         f"categorical requirements aren't included.",
-        None
+        None,
+        response_type
     )
 
 
@@ -952,7 +996,8 @@ def _handle_program_required_courses(program_phrase, memory=None):
         return (
             f"No structured required-course data is available for "
             f"{program_name}.",
-            None
+            None,
+            _program_requirement_level(program_name)
         )
 
     _record_entity_list(
@@ -971,7 +1016,8 @@ def _handle_program_required_courses(program_phrase, memory=None):
         f"(This reflects explicitly required courses only - electives "
         f"and categorical requirements, such as \"choose N credits "
         f"from...\", aren't included.)",
-        None
+        None,
+        _program_requirement_level(program_name)
     )
 
 
@@ -998,7 +1044,8 @@ def _handle_program_year_courses(program_name, year, memory=None):
         return (
             f"No structured Year {year} course data is available for "
             f"{program_name}.",
-            None
+            None,
+            "undergraduate_requirements"
         )
 
     _record_entity_list(
@@ -1019,7 +1066,8 @@ def _handle_program_year_courses(program_name, year, memory=None):
         f"Year {year} courses listed for {program_name}:\n{lines}\n"
         f"(This reflects explicitly listed required courses only - "
         f"electives and categorical requirements aren't included.)",
-        None
+        None,
+        "undergraduate_requirements"
     )
 
 
@@ -2680,7 +2728,7 @@ def structured_search(question, memory=None):
     taught_result = search_faculty_courses_taught(question, memory)
 
     if taught_result:
-        return taught_result
+        return (*taught_result, "course_instructors")
 
     # FACULTY COURSES TAUGHT - PERSON + TOPIC
     # Must also run before the plain single-person FACULTY lookup further
@@ -2692,7 +2740,7 @@ def structured_search(question, memory=None):
     person_topic_result = search_faculty_courses_by_topic(question, memory)
 
     if person_topic_result:
-        return person_topic_result
+        return (*person_topic_result, "faculty_topic_courses")
 
     # COURSE PREREQUISITES
     # Must run before the plain COURSE lookup below: "What are the
@@ -2736,7 +2784,7 @@ Description:
 {result[3]}
 {_course_metadata_section(result)}"""
 
-        return context, result[5]
+        return context, result[5], "course"
 
     # UNDERGRADUATE PROGRAM LIST (Sprint 11B)
     # Checked before the single-program lookup below: "What undergraduate
@@ -2750,7 +2798,7 @@ Description:
     program_list_result = search_undergraduate_program_list(question, memory)
 
     if program_list_result:
-        return program_list_result
+        return (*program_list_result, "undergraduate_program_list")
 
     # PROGRAM
 
@@ -2790,7 +2838,9 @@ Description:
         # Coordinator info is only added when specifically asked for, so
         # every other program query keeps producing exactly the context
         # above, unchanged.
-        if _has_coordinator_intent(question_lower):
+        coordinator_intent = _has_coordinator_intent(question_lower)
+
+        if coordinator_intent:
 
             coordinator = _get_department_coordinator(result[3])
 
@@ -2800,7 +2850,10 @@ Description:
                 "\nProgram Coordinator: Coordinator information is not available.\n"
             )
 
-        return context, result[3]
+        return (
+            context, result[3],
+            "coordinator" if coordinator_intent else "program"
+        )
 
     # FACULTY-LEVEL LIST (e.g. "Faculty of Science", "Faculty of Arts")
     # Tried before the department-level list check: these are a small,
@@ -2825,7 +2878,8 @@ Description:
 
         return (
             _format_faculty_list_context("Faculty", matched_faculty, faculty_rows),
-            None
+            None,
+            "faculty_list"
         )
 
     # DEPARTMENT - FACULTY LIST
@@ -2846,7 +2900,8 @@ Description:
 
         return (
             _format_faculty_list_context("Department", matched_department, faculty_rows),
-            None
+            None,
+            "department_faculty_list"
         )
 
     # DEPARTMENT
@@ -2871,7 +2926,9 @@ Description:
         # directly, never inferred from the free-text description, and
         # every other department query keeps producing exactly the
         # context above, unchanged.
-        if _has_coordinator_intent(question_lower):
+        coordinator_intent = _has_coordinator_intent(question_lower)
+
+        if coordinator_intent:
 
             coordinator = result["coordinator"]
 
@@ -2881,7 +2938,10 @@ Description:
                 "\nDepartment Coordinator: Coordinator information is not available.\n"
             )
 
-        return context, result[3]
+        return (
+            context, result[3],
+            "coordinator" if coordinator_intent else "department_profile"
+        )
 
     # FACULTY
 
@@ -2907,7 +2967,7 @@ Research Interests:
 {result[7]}
 """
 
-        return context, result[9]
+        return context, result[9], "faculty_profile"
 
     # RESEARCH TOPIC
     # Tried last, after every exact/structured lookup above (course,
@@ -2923,7 +2983,8 @@ Research Interests:
 
         return (
             _format_faculty_list_context("Research Topic", topic, faculty_rows),
-            None
+            None,
+            "research"
         )
 
     return None
@@ -3087,8 +3148,8 @@ def _attempt_contextual_resolution(question, pattern, type_priority, memory):
         result = structured_search(rewritten_question, memory)
 
         if result:
-            context, source = result
-            return ("resolved", context, source)
+            context, source, response_type = result
+            return ("resolved", context, source, response_type)
 
         return ("clarify", _CLARIFICATION_MESSAGES[entity_type])
 
@@ -3107,8 +3168,8 @@ def _attempt_contextual_resolution(question, pattern, type_priority, memory):
         result = structured_search(rewritten_question, memory)
 
         if result:
-            context, source = result
-            return ("resolved", context, source)
+            context, source, response_type = result
+            return ("resolved", context, source, response_type)
 
         return ("clarify", _CLARIFICATION_MESSAGES[rule_type])
 
@@ -3137,8 +3198,8 @@ def _attempt_contextual_resolution(question, pattern, type_priority, memory):
         result = structured_search(substituted_question, memory)
 
         if result:
-            context, source = result
-            return ("resolved", context, source)
+            context, source, response_type = result
+            return ("resolved", context, source, response_type)
 
         return ("clarify", _CLARIFICATION_MESSAGES[entity_type])
 
@@ -3204,8 +3265,8 @@ def _attempt_ordinal_resolution(question, position_word, memory):
         result = structured_search(rewritten_question, memory)
 
         if result:
-            context, source = result
-            return ("resolved", context, source)
+            context, source, response_type = result
+            return ("resolved", context, source, response_type)
 
         return ("clarify", _CLARIFICATION_MESSAGES.get(entity_type, _GENERIC_CLARIFICATION_MESSAGE))
 
@@ -3214,8 +3275,8 @@ def _attempt_ordinal_resolution(question, position_word, memory):
     result = structured_search(substituted_question, memory)
 
     if result:
-        context, source = result
-        return ("resolved", context, source)
+        context, source, response_type = result
+        return ("resolved", context, source, response_type)
 
     return ("clarify", _CLARIFICATION_MESSAGES.get(entity_type, _GENERIC_CLARIFICATION_MESSAGE))
 
@@ -3334,4 +3395,4 @@ def hybrid_search(question, memory=None):
         "metadatas"
     ][0][0]["url"]
 
-    return context, source
+    return context, source, "vector"

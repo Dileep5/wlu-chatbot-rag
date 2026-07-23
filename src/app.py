@@ -60,10 +60,30 @@ def is_greeting(text: str) -> bool:
     return False
 
 
+# Phase 12C: response_type values that structured_search()/hybrid_search()
+# identify as already-complete, deterministic text (Phase 12A/12B found the
+# LLM added little value re-phrasing these) - generate_answer() shows them
+# directly instead of spending an LLM call to re-word what's already a
+# correct, final answer. Every other response_type (course/program/
+# department_profile/faculty_profile/vector/etc.) is unaffected and still
+# goes through the LLM exactly as before.
+DETERMINISTIC_RESPONSE_TYPES = {
+    "prerequisite",
+    "undergraduate_requirements",
+    "graduate_requirements",
+    "coordinator",
+    "research",
+}
+
+
 def generate_answer(
     query,
-    context
+    context,
+    response_type=None
 ):
+
+    if response_type in DETERMINISTIC_RESPONSE_TYPES:
+        return context.strip()
 
     api_key = os.getenv(
         "OPENAI_API_KEY"
@@ -350,12 +370,13 @@ if query:
             )
         ):
 
-            context, source = structured
+            context, source, response_type = structured
 
             answer = (
                 generate_answer(
                     query,
-                    context
+                    context,
+                    response_type
                 )
             )
 
@@ -375,12 +396,13 @@ if query:
 
             if contextual[0] == "resolved":
 
-                _, context, source = contextual
+                _, context, source, response_type = contextual
 
                 answer = (
                     generate_answer(
                         query,
-                        context
+                        context,
+                        response_type
                     )
                 )
 
@@ -401,7 +423,7 @@ if query:
         # WLU retrieval
         else:
 
-            context, source = (
+            context, source, response_type = (
                 hybrid_search(
                     query,
                     st.session_state.memory
@@ -411,7 +433,8 @@ if query:
             answer = (
                 generate_answer(
                     query,
-                    context
+                    context,
+                    response_type
                 )
             )
 
