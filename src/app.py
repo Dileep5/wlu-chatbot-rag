@@ -65,15 +65,22 @@ def is_greeting(text: str) -> bool:
 # identify as already-complete, deterministic text (Phase 12A/12B found the
 # LLM added little value re-phrasing these) - generate_answer() shows them
 # directly instead of spending an LLM call to re-word what's already a
-# correct, final answer. Every other response_type (course/program/
+# correct, final answer. Every other response_type (program/
 # department_profile/faculty_profile/vector/etc.) is unaffected and still
 # goes through the LLM exactly as before.
+#
+# Phase 13D: "course" added so renderer.py's Course Card (Phase 13C) has
+# the raw "Course Code:"/"Course Name:"/... labeled text to parse - an
+# LLM paraphrase of that text (the prior behavior) almost never
+# reproduces those labels verbatim, which is why the card previously
+# fell back to the plain rendering for nearly every live query.
 DETERMINISTIC_RESPONSE_TYPES = {
     "prerequisite",
     "undergraduate_requirements",
     "graduate_requirements",
     "coordinator",
     "research",
+    "course",
 }
 
 

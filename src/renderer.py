@@ -62,13 +62,23 @@ _COURSE_FIELD_ALTERNATION = "|".join(
 )
 
 # Fields shown on the card, in display order (Requirement 3) - not the
-# same order they appear in the source text.
+# same order they appear in the source text. Corequisites/Exclusions/
+# Location/Notes (Phase 13D) come after the original five fields - since
+# "course" now bypasses the LLM entirely, these Sprint 10D metadata
+# fields would otherwise never reach the user at all (they used to be
+# folded into the LLM's paraphrase; the card is now the only rendering
+# path, so it has to cover everything the raw text can carry, not just
+# the original five).
 _COURSE_CARD_FIELDS = [
     "Course Code",
     "Course Name",
     "Credits",
     "Prerequisites",
     "Description",
+    "Corequisites",
+    "Exclusions",
+    "Location",
+    "Notes",
 ]
 
 
@@ -99,19 +109,15 @@ def _parse_course_fields(answer):
     present at all. That's expected, not an error - render_course() falls
     back to the original rendering whenever this returns None."""
 
-    code = _extract_course_field("Course Code", answer)
-    name = _extract_course_field("Course Name", answer)
+    fields = {
+        label: _extract_course_field(label, answer)
+        for label in _COURSE_CARD_FIELDS
+    }
 
-    if not code or not name:
+    if not fields["Course Code"] or not fields["Course Name"]:
         return None
 
-    return {
-        "Course Code": code,
-        "Course Name": name,
-        "Credits": _extract_course_field("Credits", answer),
-        "Prerequisites": _extract_course_field("Prerequisites", answer),
-        "Description": _extract_course_field("Description", answer),
-    }
+    return fields
 
 
 def _render_course_fallback(answer, source):
