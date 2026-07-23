@@ -82,11 +82,16 @@ _COURSE_CARD_FIELDS = [
 ]
 
 
-def _extract_course_field(label, text):
+def _extract_labeled_field(label, text, label_alternation):
+    """Captures a label's value up to whichever known label comes next
+    (or end of string) - shared by course and faculty parsing, since both
+    answer shapes are the same pattern: a fixed set of "Label: value"
+    lines, some of which (Description/Biography) continue over multiple
+    lines rather than ending at the first newline."""
 
     pattern = (
         rf"{re.escape(label)}:\s*(.*?)"
-        rf"(?=\n\s*(?:{_COURSE_FIELD_ALTERNATION}):|\Z)"
+        rf"(?=\n\s*(?:{label_alternation}):|\Z)"
     )
 
     match = re.search(pattern, text, re.DOTALL)
@@ -110,7 +115,7 @@ def _parse_course_fields(answer):
     back to the original rendering whenever this returns None."""
 
     fields = {
-        label: _extract_course_field(label, answer)
+        label: _extract_labeled_field(label, answer, _COURSE_FIELD_ALTERNATION)
         for label in _COURSE_CARD_FIELDS
     }
 
@@ -153,9 +158,104 @@ def render_course(answer, source):
     _render_source(source)
 
 
-def render_faculty(answer, source):
+# Phase 13E: known labels the raw faculty_profile context can contain
+# (search_faculty()'s own f-string in retriever.py) - "Contact" is a bare
+# section heading with no value of its own, but still has to be listed
+# here so it's recognized as a boundary when capturing the field right
+# before it (Department).
+_FACULTY_FIELD_LABELS = [
+    "Name",
+    "Title",
+    "Faculty",
+    "Department",
+    "Contact",
+    "Email",
+    "Phone",
+    "Office",
+    "Biography",
+    "Research Interests",
+    "Website",
+    "Office Hours",
+]
+
+_FACULTY_FIELD_ALTERNATION = "|".join(
+    re.escape(label) for label in _FACULTY_FIELD_LABELS
+)
+
+# Fields shown on the card, in display order. Name/Title/Department/
+# Email/Office/Phone/Research Interests are Requirement 3's named
+# fields; Faculty and Biography are additional - both appear in the
+# existing raw context and dropping them would be real information
+# loss (the same mistake Phase 13D found and fixed for the Course
+# Card). Website/Office Hours have no corresponding column in
+# faculty.db at all (confirmed directly against the schema) - they're
+# still listed so parsing would pick them up if that data ever exists,
+# but today they'll always be absent and simply hidden, per
+# Requirement 3's "hide missing fields."
+_FACULTY_CARD_FIELDS = [
+    "Name",
+    "Title",
+    "Faculty",
+    "Department",
+    "Email",
+    "Office",
+    "Phone",
+    "Research Interests",
+    "Biography",
+    "Website",
+    "Office Hours",
+]
+
+
+def _parse_faculty_fields(answer):
+    """Mirrors _parse_course_fields() - best-effort parse of the existing
+    label:value faculty text. Returns None (parsing "failed") unless Name
+    is found - the one field that actually identifies a person - since
+    "faculty_profile" answer text can still be LLM-paraphrased prose in
+    older stored session history from before this phase, with no labels
+    to find at all. render_faculty() falls back to the original
+    rendering whenever this returns None."""
+
+    fields = {
+        label: _extract_labeled_field(label, answer, _FACULTY_FIELD_ALTERNATION)
+        for label in _FACULTY_CARD_FIELDS
+    }
+
+    if not fields["Name"]:
+        return None
+
+    return fields
+
+
+def _render_faculty_fallback(answer, source):
 
     st.markdown(f"👨‍🏫 Faculty\n\n{answer}")
+    _render_source(source)
+
+
+# A single st.markdown() call, not one per field - same reasoning as
+# render_course() (the evaluate.py AppTest harness reads only the first
+# markdown element of the last chat message).
+def render_faculty(answer, source):
+
+    fields = _parse_faculty_fields(answer)
+
+    if not fields:
+        _render_faculty_fallback(answer, source)
+        return
+
+    lines = ["👨‍🏫 Faculty", ""]
+
+    for label in _FACULTY_CARD_FIELDS:
+
+        value = fields.get(label)
+
+        if value:
+            lines.append(f"**{label}**")
+            lines.append(value)
+            lines.append("")
+
+    st.markdown("\n".join(lines).rstrip())
     _render_source(source)
 
 
