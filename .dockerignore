@@ -1,0 +1,29 @@
+# Data - mounted as a volume at runtime (see docker-compose.yml), never
+# baked into the image.
+data/
+
+# Ingestion pipeline outputs / evaluation artifacts - not needed to serve
+# the chatbot, and not copied by the Dockerfile regardless.
+outputs/
+evaluation/
+
+# Version control / editor / OS
+.git/
+.gitignore
+.claude/
+.vscode/
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Secrets - injected at runtime via docker-compose's env_file, never
+# baked into the image.
+.env
+
+# Scraper inputs, irrelevant to the serving image
+course_text.txt
+urls.txt

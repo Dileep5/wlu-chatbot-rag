@@ -1,0 +1,27 @@
+services:
+  chatbot:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      # Explicit, so the cache location doesn't depend on which user the
+      # base image happens to default to.
+      - HF_HOME=/root/.cache/huggingface
+    volumes:
+      # Data is a working ingestion artifact (courses.db/faculty.db/
+      # programs.db/departments.db/vector_db/), rebuilt independently of
+      # application code - mounted, never baked into the image. Read-only:
+      # nothing in the serving path writes to these at runtime (Phase 12D
+      # finding - zero INSERT/UPDATE/.commit() calls in app.py/retriever.py).
+      - ./data:/app/data:ro
+      # sentence-transformers downloads all-MiniLM-L6-v2 from the Hugging
+      # Face Hub on first use and caches it here - a named volume means
+      # that download survives container restarts instead of re-fetching
+      # ~87MB from the network every time.
+      - hf-cache:/root/.cache/huggingface
+    restart: unless-stopped
+
+volumes:
+  hf-cache:
