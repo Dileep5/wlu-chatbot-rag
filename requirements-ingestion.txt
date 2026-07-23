@@ -1,0 +1,16 @@
+# Ingestion manifest (Phase 12F) - packages required to run the scraper/
+# loader/vector-db-build pipeline (scrape.py, crawler.py, chunk.py,
+# clean.py, get_*.py, load_*.py, save_*.py, build_vector_db.py,
+# build_faculty_vector_db.py, create_*_table.py, sync_undergraduate.py).
+#
+# Reuses requirements-runtime.txt rather than re-pinning chromadb/
+# sentence-transformers here too - build_vector_db.py and
+# build_faculty_vector_db.py need the same vector-embedding stack the
+# serving path queries, so pinning it in one place (runtime) and
+# reusing it here keeps both manifests' shared versions from ever
+# drifting out of sync with each other.
+-r requirements-runtime.txt
+
+pandas==2.3.1
+beautifulsoup4==4.13.4
+requests==2.32.4

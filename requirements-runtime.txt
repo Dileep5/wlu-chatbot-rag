@@ -1,0 +1,22 @@
+# Runtime manifest (Phase 12F) - packages required to serve the chatbot
+# via `streamlit run src/app.py`. Traced directly from the live import
+# chain (app.py -> retriever.py, conversation.py, domain_guard.py,
+# memory.py, intent_classifier.py) - nothing here is unused, and nothing
+# the serving path actually imports is missing.
+#
+# Every version below is exactly what's installed and passing the full
+# evaluate.py regression suite (226/226) as of Phase 12F - pinned, not
+# ranged, so a future install can't silently pick up a newer chromadb/
+# sentence-transformers release that changes embedding or retrieval
+# behavior out from under the regression suite (Phase 12E's reasoning).
+#
+# sentence-transformers pulls in torch/transformers/onnxruntime/numpy/
+# tokenizers/huggingface-hub transitively - none of those are imported
+# directly anywhere in src/, so they're intentionally left unpinned here
+# and are expected to be captured by a separate lock file when one is
+# generated for Docker builds, not hand-pinned in this manifest.
+
+chromadb==1.5.9
+sentence-transformers==5.5.1
+streamlit==1.58.0
+openai==2.44.0

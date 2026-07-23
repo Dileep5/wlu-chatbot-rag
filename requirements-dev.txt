@@ -1,0 +1,15 @@
+# Development manifest (Phase 12F) - everything needed to run the
+# complete evaluation suite (`python3 src/evaluate.py`) and the ad hoc
+# check_*.py/test_*.py/inspect_*.py development utilities.
+#
+# evaluate.py's own top-level imports are just streamlit.testing.v1.
+# AppTest plus stdlib, but several of its check functions lazily import
+# from ingestion modules (get_faculty_links, load_faculty) to exercise
+# their helper functions directly - and importing those modules at all
+# runs their own top-level `import requests` / `from bs4 import
+# BeautifulSoup`. Running the full suite therefore needs the complete
+# union of the runtime and ingestion stacks, not a separate package set
+# of its own - there is no dedicated test framework (no pytest) in this
+# project beyond that.
+-r requirements-runtime.txt
+-r requirements-ingestion.txt
