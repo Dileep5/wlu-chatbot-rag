@@ -259,9 +259,93 @@ def render_faculty(answer, source):
     _render_source(source)
 
 
-def render_program(answer, source):
+# Phase 13F: known labels the raw "program" context can contain
+# (search_program()'s own f-string in retriever.py) - same lookahead-
+# boundary pattern as course/faculty parsing.
+_PROGRAM_FIELD_LABELS = [
+    "Program",
+    "Level",
+    "Program Type",
+    "Description",
+    "Admission Requirements",
+    "Program Requirements",
+]
+
+_PROGRAM_FIELD_ALTERNATION = "|".join(
+    re.escape(label) for label in _PROGRAM_FIELD_LABELS
+)
+
+# (display label, raw label) pairs, in display order. Program Name/
+# Level/Admission Requirements/Description are Requirement 3's named
+# fields the raw text actually has a label for ("Program" is renamed to
+# "Program Name" to match Requirement 3's wording). Degree/Department/
+# Required Courses/Electives/Credits Required/Coordinator/Duration have
+# no corresponding label anywhere in this response_type's text (this is
+# a real data gap, not a parsing miss - confirmed directly against
+# retriever.py's PROGRAM branch, which never produces any of them), so
+# they're simply never found and hidden, per Requirement 3's "hide
+# missing fields." Program Type/Program Requirements are additional
+# labels the raw text does contain - shown per Requirement 4 rather
+# than dropped, the same lesson already applied to the Course and
+# Faculty cards.
+_PROGRAM_CARD_FIELD_MAP = [
+    ("Program Name", "Program"),
+    ("Level", "Level"),
+    ("Program Type", "Program Type"),
+    ("Admission Requirements", "Admission Requirements"),
+    ("Program Requirements", "Program Requirements"),
+    ("Description", "Description"),
+]
+
+
+def _parse_program_fields(answer):
+    """Mirrors _parse_course_fields()/_parse_faculty_fields() - returns
+    None (parsing "failed") unless Program Name is found, since that's
+    the one field that actually identifies a program. Text for
+    "undergraduate_requirements"/"graduate_requirements"/
+    "undergraduate_program_list" response_types never has this label at
+    all (they're sentences/bulleted lists, not a label:value program
+    sheet), so this correctly returns None for those and render_program()
+    falls back to the original rendering - unchanged from before this
+    phase for all three."""
+
+    fields = {
+        display: _extract_labeled_field(raw, answer, _PROGRAM_FIELD_ALTERNATION)
+        for display, raw in _PROGRAM_CARD_FIELD_MAP
+    }
+
+    if not fields["Program Name"]:
+        return None
+
+    return fields
+
+
+def _render_program_fallback(answer, source):
 
     st.markdown(f"🎓 Program\n\n{answer}")
+    _render_source(source)
+
+
+def render_program(answer, source):
+
+    fields = _parse_program_fields(answer)
+
+    if not fields:
+        _render_program_fallback(answer, source)
+        return
+
+    lines = ["🎓 Program", ""]
+
+    for display, _ in _PROGRAM_CARD_FIELD_MAP:
+
+        value = fields.get(display)
+
+        if value:
+            lines.append(f"**{display}**")
+            lines.append(value)
+            lines.append("")
+
+    st.markdown("\n".join(lines).rstrip())
     _render_source(source)
 
 

@@ -1779,26 +1779,43 @@ def search_program(question, memory=None):
 
     # Tier 2b: bare-subject fallback (Sprint 11B) - see _strip_to_subject()
     # docstring. Tried only after the degree-aware Tier 2 match above
-    # fails. A bare subject name is often shared by several program-type
+    # fails.
+    #
+    # First, restricted to the LONGEST matching subject (Phase 13F fix) -
+    # a shorter, more generic subject can be a substring of a longer,
+    # more specific one that also matches (e.g. "science" is a substring
+    # of "data science", so both "Honours BSc Science" and "Honours BSc
+    # Data Science" used to match "What is the Data Science minor?"
+    # equally) - confirmed live: without this restriction, the *shorter*
+    # match ("Honours BSc Science") could still win purely because it
+    # happened to have course-requirement data and the more specific
+    # match didn't, which is backwards - specificity has to be decided
+    # before that tie-break, not after it. This mirrors the longest-
+    # name-first precedent _match_program_name() already uses elsewhere
+    # in this file, applied to subject length instead of full name
+    # length.
+    #
+    # A bare subject name is often shared by several program-type
     # variants of the same subject (major, minor, concentration,
-    # combined...), so this is checked in three passes: "major"-type
-    # rows that also have real, structured course-requirement data
-    # first (Sprint 11C - among several same-subject major variants,
-    # e.g. an Honours BA and an Honours BSc version of Computer Science,
-    # prefer whichever one can actually answer a course-requirement
-    # follow-up, so establishing a program via a bare subject name and
-    # then asking "what do I take in first year?" resolves to a program
-    # with real data rather than an arbitrarily-ordered sibling that has
-    # none); "major"-type rows generally next, so a bare subject name
-    # still resolves to a plain major by default (per Sprint 11A's
+    # combined...), so whatever remains tied at that best specificity
+    # level is then checked in three passes: "major"-type rows that also
+    # have real, structured course-requirement data first (Sprint 11C -
+    # among several same-subject major variants, e.g. an Honours BA and
+    # an Honours BSc version of Computer Science, prefer whichever one
+    # can actually answer a course-requirement follow-up, so
+    # establishing a program via a bare subject name and then asking
+    # "what do I take in first year?" resolves to a program with real
+    # data rather than an arbitrarily-ordered sibling that has none);
+    # "major"-type rows generally next, so a bare subject name still
+    # resolves to a plain major by default (per Sprint 11A's
     # investigation recommendation) even when none of the candidates
     # have course-requirement data; any other type only as a last-resort
     # fallback.
-    requirement_program_names = None
+    candidate_rows = []
+    best_subject_length = 0
 
     for row in rows:
 
-        program_type = row["program_type"] if "program_type" in row.keys() else None
         subject = _strip_to_subject(row[0].lower())
 
         if not (
@@ -1808,6 +1825,19 @@ def search_program(question, memory=None):
             and not _subject_match_degree_conflicts(row[0], question_lower)
         ):
             continue
+
+        if len(subject) > best_subject_length:
+            best_subject_length = len(subject)
+            candidate_rows = [row]
+
+        elif len(subject) == best_subject_length:
+            candidate_rows.append(row)
+
+    requirement_program_names = None
+
+    for row in candidate_rows:
+
+        program_type = row["program_type"] if "program_type" in row.keys() else None
 
         if program_type != "major":
             continue
@@ -1826,27 +1856,18 @@ def search_program(question, memory=None):
 
     for preferred_types in (("major",), None):
 
-        for row in rows:
+        for row in candidate_rows:
 
             program_type = row["program_type"] if "program_type" in row.keys() else None
 
             if preferred_types and program_type not in preferred_types:
                 continue
 
-            subject = _strip_to_subject(row[0].lower())
+            if memory is not None:
+                memory["last_program"] = row[0]
+                _record_entity(memory, "program", row[0], row[0], "search_program")
 
-            if (
-                len(subject) >= 3
-                and subject in normalized_question
-                and _subject_match_is_safe(subject, question_lower)
-                and not _subject_match_degree_conflicts(row[0], question_lower)
-            ):
-
-                if memory is not None:
-                    memory["last_program"] = row[0]
-                    _record_entity(memory, "program", row[0], row[0], "search_program")
-
-                return row
+            return row
 
     return None
 

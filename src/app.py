@@ -65,9 +65,9 @@ def is_greeting(text: str) -> bool:
 # identify as already-complete, deterministic text (Phase 12A/12B found the
 # LLM added little value re-phrasing these) - generate_answer() shows them
 # directly instead of spending an LLM call to re-word what's already a
-# correct, final answer. Every other response_type (program/
-# department_profile/vector/etc.) is unaffected and still goes through
-# the LLM exactly as before.
+# correct, final answer. Every other response_type (department_profile/
+# undergraduate_program_list/vector/etc.) is unaffected and still goes
+# through the LLM exactly as before.
 #
 # Phase 13D: "course" added so renderer.py's Course Card (Phase 13C) has
 # the raw "Course Code:"/"Course Name:"/... labeled text to parse - an
@@ -78,6 +78,13 @@ def is_greeting(text: str) -> bool:
 # Phase 13E: "faculty_profile" added for the same reason, so the Faculty
 # Card has the raw "Name:"/"Title:"/... labeled text to parse instead of
 # an LLM paraphrase of it.
+#
+# Phase 13F: "program" added for the same reason, so the Program Card has
+# the raw "Program:"/"Level:"/... labeled text to parse. "undergraduate_
+# requirements"/"graduate_requirements" were already deterministic, and
+# "undergraduate_program_list" is a bulleted list of many programs, not
+# a single program's fields - the card can't apply to it regardless, so
+# it's deliberately left on the LLM path, unchanged.
 DETERMINISTIC_RESPONSE_TYPES = {
     "prerequisite",
     "undergraduate_requirements",
@@ -86,6 +93,7 @@ DETERMINISTIC_RESPONSE_TYPES = {
     "research",
     "course",
     "faculty_profile",
+    "program",
 }
 
 
