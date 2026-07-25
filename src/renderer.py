@@ -326,6 +326,205 @@ def _render_program_fallback(answer, source):
     _render_source(source)
 
 
+# Phase 13F: known labels the raw "program" context can contain
+# Phase 14B: real scraped undergraduate program descriptions (confirmed
+# directly against live data, e.g. "Honours BSc Computer Science") embed
+# a year-by-year course breakdown and a regulations block as literal,
+# standalone-line headings within the Description text itself - "Year
+# 1"/"Year 2"/"Year 3"/"Year 4" and "Program Regulations". These are
+# used as section boundaries below; nothing here changes what
+# retriever.py produces, only how this already-parsed text gets
+# reorganized for display.
+_YEAR_HEADING_PATTERN = re.compile(r"(?m)^[ \t]*Year[ \t]+([1-4])[ \t]*$")
+
+_PROGRAM_REGULATIONS_HEADING_PATTERN = re.compile(
+    r"(?m)^[ \t]*Program Regulations[ \t]*$"
+)
+
+# Graduate program descriptions (confirmed directly, e.g. "Master of
+# Applied Politics") use a different standalone-line heading instead of
+# "Program Regulations" - "Additional Information", immediately followed
+# by a short page-navigation-style list of the sub-headings that repeat
+# right after it (which duplicate the separately-labeled Admission
+# Requirements/Program Requirements text already captured on their own).
+# Recognizing it as a boundary too keeps that duplicate tail out of
+# Overview, the same way "Program Regulations" already does for
+# undergraduate descriptions.
+_ADDITIONAL_INFO_HEADING_PATTERN = re.compile(
+    r"(?m)^[ \t]*Additional Information[ \t]*$"
+)
+
+# A confirmed, recurring scraped-page footer artifact (seen verbatim in
+# multiple real program descriptions) - not a real "regulations" fact,
+# but not discarded either: routed into Additional Information's "Other
+# notes" rather than left mixed into Program Regulations.
+_TRAILING_BOILERPLATE_PATTERN = re.compile(
+    r"Academic\s*&\s*Related\s*Dates", re.IGNORECASE
+)
+
+# Sentence-level keywords used only to decide which sentence, within the
+# text following "Program Regulations", belongs under Additional
+# Information (campus/delivery mode/co-op) rather than staying under
+# Program Regulations proper (GPA/graduation/progression). This is a
+# best-effort classification, not exact NLP - any sentence that matches
+# none of these simply stays under Program Regulations, so nothing is
+# ever dropped regardless of how well a given sentence classifies.
+_ADDITIONAL_INFO_KEYWORDS = [
+    "campus", "campuses",
+    "delivery", "in-person", "hyflex", "hybrid", "online", "remote",
+    "co-op", "cooperative education", "internship", "placement",
+]
+
+
+def _split_regulations_and_additional(text):
+    """Splits the text following the "Program Regulations" heading into
+    (regulations, additional) - sentences matching a campus/delivery/
+    co-op keyword go to "additional", the trailing scraped-page footer
+    (if present) always goes to "additional" as a catch-all "other
+    notes", and everything else stays in "regulations". Never drops
+    anything: every sentence ends up in exactly one of the two."""
+
+    if not text:
+        return None, None
+
+    boilerplate_match = _TRAILING_BOILERPLATE_PATTERN.search(text)
+
+    if boilerplate_match:
+        main_text = text[:boilerplate_match.start()].strip()
+        footer_text = text[boilerplate_match.start():].strip()
+    else:
+        main_text = text
+        footer_text = None
+
+    chunks = re.split(r"(?<=[.!?])\s+", main_text) if main_text else []
+
+    regulation_chunks = []
+    additional_chunks = []
+
+    for chunk in chunks:
+
+        chunk = chunk.strip()
+
+        if not chunk:
+            continue
+
+        lowered = chunk.lower()
+
+        if any(keyword in lowered for keyword in _ADDITIONAL_INFO_KEYWORDS):
+            additional_chunks.append(chunk)
+        else:
+            regulation_chunks.append(chunk)
+
+    if footer_text:
+        additional_chunks.append(footer_text)
+
+    regulations = " ".join(regulation_chunks).strip() or None
+    additional = "\n\n".join(additional_chunks).strip() or None
+
+    return regulations, additional
+
+
+def _split_program_description(description):
+    """Best-effort split of the Description text into an overview,
+    a year-by-year schedule, a regulations block, and an additional-
+    information block - every one of which may be empty/None if this
+    particular description doesn't contain that structure at all (e.g.
+    a short graduate description with no year breakdown), in which case
+    the whole thing simply stays as "overview". Every character of the
+    input ends up in exactly one of the four returned pieces - nothing
+    is ever discarded, only reorganized."""
+
+    if not description:
+        return {"overview": None, "schedule": [], "regulations": None, "additional": None}
+
+    regulations_match = _PROGRAM_REGULATIONS_HEADING_PATTERN.search(description)
+    additional_match = _ADDITIONAL_INFO_HEADING_PATTERN.search(description)
+
+    # Whichever of the two non-year headings appears first - used both
+    # to bound the schedule below and as an Overview boundary alongside
+    # the year headings.
+    non_year_positions = [
+        m.start() for m in (regulations_match, additional_match) if m
+    ]
+    earliest_non_year = min(non_year_positions) if non_year_positions else None
+
+    year_matches = list(_YEAR_HEADING_PATTERN.finditer(description))
+
+    # Only years found BEFORE that boundary count as schedule boundaries -
+    # real data never puts them after, but this keeps the boundary math
+    # below unambiguous if it ever did.
+    if earliest_non_year is not None:
+        year_matches = [m for m in year_matches if m.start() < earliest_non_year]
+
+    boundary_positions = [m.start() for m in year_matches]
+
+    if earliest_non_year is not None:
+        boundary_positions.append(earliest_non_year)
+
+    first_boundary = min(boundary_positions) if boundary_positions else None
+
+    overview = (
+        description[:first_boundary].strip()
+        if first_boundary is not None
+        else description.strip()
+    )
+
+    schedule = []
+
+    if year_matches:
+
+        next_boundaries = [m.start() for m in year_matches[1:]]
+        next_boundaries.append(
+            earliest_non_year if earliest_non_year is not None else len(description)
+        )
+
+        for match, boundary_end in zip(year_matches, next_boundaries):
+
+            year_text = description[match.end():boundary_end].strip()
+
+            if year_text:
+                schedule.append((f"Year {match.group(1)}", year_text))
+
+    regulations_text = None
+    additional_chunks = []
+
+    if regulations_match:
+
+        # Bounded by the Additional Information heading if one follows
+        # it, otherwise runs to the end of the description - either way,
+        # keyword-based sentence classification is always applied, so a
+        # campus/delivery/co-op mention (or the trailing page footer)
+        # still surfaces under Additional Information rather than
+        # staying mixed into genuine GPA/graduation/progression text,
+        # regardless of which heading combination this description has.
+        regulations_end = (
+            additional_match.start()
+            if additional_match and additional_match.start() > regulations_match.start()
+            else len(description)
+        )
+        remainder = description[regulations_match.end():regulations_end].strip()
+        regulations_text, extra_additional = _split_regulations_and_additional(remainder)
+
+        if extra_additional:
+            additional_chunks.append(extra_additional)
+
+    if additional_match:
+
+        additional_remainder = description[additional_match.end():].strip()
+
+        if additional_remainder:
+            additional_chunks.append(additional_remainder)
+
+    additional_text = "\n\n".join(additional_chunks).strip() or None
+
+    return {
+        "overview": overview or None,
+        "schedule": schedule,
+        "regulations": regulations_text,
+        "additional": additional_text,
+    }
+
+
 def render_program(answer, source):
 
     fields = _parse_program_fields(answer)
@@ -334,16 +533,103 @@ def render_program(answer, source):
         _render_program_fallback(answer, source)
         return
 
+    try:
+        sections = _split_program_description(fields.get("Description"))
+    except Exception:
+        _render_program_fallback(answer, source)
+        return
+
     lines = ["🎓 Program", ""]
 
-    for display, _ in _PROGRAM_CARD_FIELD_MAP:
+    # 🎓 Program Information - Program Name/Level/Program Type are the
+    # only fields of Requirement 3's list this response_type's text ever
+    # has (Degree/Department have no corresponding label anywhere in it -
+    # a real data gap, not a parsing miss, confirmed in Phase 13F).
+    info_fields = [
+        ("Program Name", fields.get("Program Name")),
+        ("Level", fields.get("Level")),
+        ("Program Type", fields.get("Program Type")),
+    ]
 
-        value = fields.get(display)
+    if any(value for _, value in info_fields):
 
-        if value:
-            lines.append(f"**{display}**")
-            lines.append(value)
+        lines.append("## 🎓 Program Information")
+        lines.append("")
+
+        for label, value in info_fields:
+
+            if value:
+                lines.append(f"**{label}**")
+                lines.append(value)
+                lines.append("")
+
+    # 📥 Admission Requirements - not in Requirement 3's named section
+    # list, but the raw text does carry it as its own label (graduate
+    # programs) - preserved as its own section rather than dropped, the
+    # same "don't lose extra labeled fields" precedent already applied
+    # to the Course and Faculty cards.
+    if fields.get("Admission Requirements"):
+
+        lines.append("## 📥 Admission Requirements")
+        lines.append("")
+        lines.append(fields["Admission Requirements"])
+        lines.append("")
+
+    # 📝 Overview
+    if sections["overview"]:
+
+        lines.append("## 📝 Overview")
+        lines.append("")
+        lines.append(sections["overview"])
+        lines.append("")
+
+    # 📚 Required Courses - graduate programs describe these in prose
+    # under the "Program Requirements" label (already parsed above);
+    # undergraduate programs organized by year instead list them inside
+    # each Year's own block below, so this section is left hidden for
+    # those rather than duplicating the same courses under two headings.
+    if fields.get("Program Requirements"):
+
+        lines.append("## 📚 Required Courses")
+        lines.append("")
+        lines.append(fields["Program Requirements"])
+        lines.append("")
+
+    # 📅 Recommended Schedule
+    if sections["schedule"]:
+
+        lines.append("## 📅 Recommended Schedule")
+        lines.append("")
+
+        for year_label, year_text in sections["schedule"]:
+            lines.append(f"**{year_label}**")
+            lines.append(year_text)
             lines.append("")
+
+    # 📋 Program Regulations
+    if sections["regulations"]:
+
+        lines.append("## 📋 Program Regulations")
+        lines.append("")
+        lines.append(sections["regulations"])
+        lines.append("")
+
+    # ℹ️ Additional Information
+    if sections["additional"]:
+
+        lines.append("## ℹ️ Additional Information")
+        lines.append("")
+        lines.append(sections["additional"])
+        lines.append("")
+
+    # 🔗 Source - the actual link is still rendered by the shared
+    # _render_source() helper (unchanged, still used identically by the
+    # Course/Faculty/generic renderers) in its own call right after this
+    # one; this heading just labels it consistently with the sections
+    # above, inside the same combined block the AppTest harness reads.
+    if source:
+        lines.append("## 🔗 Source")
+        lines.append("")
 
     st.markdown("\n".join(lines).rstrip())
     _render_source(source)
