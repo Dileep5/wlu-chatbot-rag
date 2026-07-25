@@ -265,19 +265,65 @@ Be friendly and conversational.
 # -----------------------------
 
 st.set_page_config(
-    page_title="WLU Chatbot",
+    page_title="WLU Hybrid RAG Assistant",
     page_icon="🎓",
     layout="centered"
 )
 
 st.title(
-    "Deepu's Sandra WLU Chatbot"
+    "WLU Hybrid RAG Assistant"
 )
 
 st.caption(
-    "Hybrid RAG Assistant for "
-    "Wilfrid Laurier University"
+    "Ask questions about Wilfrid Laurier University courses, "
+    "programs, faculty, admissions, scholarships, tuition, and "
+    "student services."
 )
+
+st.info(
+    "👋 **Welcome!** I'm a hybrid RAG assistant for Wilfrid Laurier "
+    "University. I can help with course details, program and "
+    "admission requirements, faculty profiles, scholarships, "
+    "tuition, and student services - grounded in real WLU data, "
+    "not general knowledge."
+)
+
+
+# -----------------------------
+# Sidebar
+# -----------------------------
+
+with st.sidebar:
+
+    st.markdown("## 🎓 WLU Hybrid RAG Assistant")
+
+    st.divider()
+
+    st.markdown("### 🛠️ Technology Stack")
+    st.markdown(
+        "- Python\n"
+        "- Streamlit\n"
+        "- ChromaDB\n"
+        "- SQLite\n"
+        "- Sentence Transformers\n"
+        "- OpenAI GPT\n"
+        "- Hybrid RAG"
+    )
+
+    st.markdown("### 📚 Knowledge Sources")
+    st.markdown(
+        "- Academic Calendar\n"
+        "- Faculty Directory\n"
+        "- WLU Website"
+    )
+
+    st.markdown("### ℹ️ About")
+    st.markdown(
+        "This assistant pairs deterministic structured retrieval "
+        "(courses, programs, faculty) with vector search and an "
+        "LLM, grounding every answer in real, scraped Wilfrid "
+        "Laurier University data rather than general knowledge."
+    )
 
 
 # -----------------------------
@@ -292,6 +338,50 @@ if "chat_history" not in st.session_state:
 
 if "memory" not in st.session_state:
     st.session_state.memory = create_memory()
+
+if "pending_query" not in st.session_state:
+    st.session_state.pending_query = None
+
+
+# -----------------------------
+# Suggested Questions - shown only before the first turn, and hidden on
+# the one rerun immediately after a suggestion is clicked (pending_query
+# set) so they never overlap with the chat reply that's about to render.
+# -----------------------------
+
+SUGGESTED_QUESTIONS = [
+    "What is CP312?",
+    "Tell me about CP317.",
+    "Tell me about Ammara Mahmood.",
+    "Tell me about the Honours BSc Computer Science program.",
+    "What scholarships are available?",
+    "What are the admission requirements?",
+]
+
+st.divider()
+
+show_suggestions = (
+    not st.session_state.messages
+    and not st.session_state.pending_query
+)
+
+if show_suggestions:
+
+    st.markdown("#### 💡 Try asking:")
+
+    cols = st.columns(2)
+
+    for i, suggestion in enumerate(SUGGESTED_QUESTIONS):
+
+        if cols[i % 2].button(
+            suggestion,
+            key=f"suggested_question_{i}",
+            use_container_width=True
+        ):
+            st.session_state.pending_query = suggestion
+            st.rerun()
+
+    st.divider()
 
 
 # -----------------------------
@@ -318,6 +408,10 @@ for msg in st.session_state.messages:
 query = st.chat_input(
     "Ask something about WLU..."
 )
+
+if not query and st.session_state.pending_query:
+    query = st.session_state.pending_query
+    st.session_state.pending_query = None
 
 
 if query:
