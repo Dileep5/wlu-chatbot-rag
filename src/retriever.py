@@ -2501,17 +2501,31 @@ _NAME_QUERY_FILLER_WORDS = _DEPARTMENT_LIST_FILLER_WORDS | {
     "first", "second", "third", "fourth", "fifth", "last", "one",
 }
 
-# At most a first+middle+last name's worth of actual content - short
-# enough that the residual (question words minus filler) is almost
-# certainly the name attempt itself, so any casing is accepted. A longer
-# residual means the question has substantial content beyond scaffolding
-# (e.g. "your favorite movie", "the latest Super Bowl champion") - there,
-# capitalization (skipping the sentence-initial word, capitalized by
-# convention regardless of content) is the only cheap signal left that a
-# word is a proper noun and not an ordinary English word that happens to
-# be one edit away from a real surname (reproduced false positives
-# without this gate: "tell" -> "Bell", "list"/"write" -> "Lisa"/"White").
-_BARE_NAME_RESIDUAL_MAX_WORDS = 3
+# At most a first+last name's worth of actual content - short enough
+# that the residual (question words minus filler) is almost certainly
+# the name attempt itself, so any casing is accepted without requiring
+# any other person-intent signal. Deliberately capped at 2, not looser:
+# real-world testing found a 3-word residual is where an ordinary topic
+# question can land after filler-stripping too (e.g. "What is the
+# tuition for Mars students?" strips to "tuition mars students") - and
+# "Mars" is one edit from several real first/last names (Marc/Mark/
+# Mary/Marsh), a reproduced false positive that hijacked an
+# international-tuition question into a faculty-disambiguation prompt.
+# 2 stays wide enough for every required typo case (a bare single name
+# or a first+last pair, e.g. "ranawera", "Chatura Ranweera", "Who is
+# mahmoodd?" all resolve to a residual of 1-2) without accepting a
+# 3-word remainder that's just as likely to be ordinary sentence content.
+_BARE_NAME_RESIDUAL_MAX_WORDS = 2
+
+# A longer residual means the question has substantial content beyond
+# scaffolding - capitalization alone (an ordinary proper noun signal)
+# isn't enough there, since real, ordinary proper nouns unrelated to any
+# person also collide at edit-distance 1 by chance ("Mars" above). An
+# explicit person-intent word - "who", or a title - is required in
+# addition, so this branch only ever fires for a question that's
+# actually asking about a person, matching the same title-word signal
+# already used by _extract_person_query_name elsewhere in this file.
+_PERSON_INTENT_PATTERN = re.compile(r"\b(?:who|professor|prof|dr)\.?\b", re.IGNORECASE)
 
 
 def _fuzzy_candidate_words(question, question_lower):
@@ -2521,7 +2535,7 @@ def _fuzzy_candidate_words(question, question_lower):
 
     if residual and len(residual) <= _BARE_NAME_RESIDUAL_MAX_WORDS:
         candidates = residual
-    else:
+    elif _PERSON_INTENT_PATTERN.search(question_lower):
         # Skip index 0: the sentence-initial word is capitalized by
         # convention regardless of whether it's a proper noun, so it
         # carries no signal here.
@@ -2530,6 +2544,8 @@ def _fuzzy_candidate_words(question, question_lower):
             for index, word in enumerate(re.findall(r"[A-Za-z']+", question))
             if index > 0 and word[:1].isupper()
         ]
+    else:
+        candidates = []
 
     return [word for word in candidates if len(word) >= _MIN_NAME_TOKEN_LENGTH]
 
@@ -2906,6 +2922,92 @@ Faculty members:
 """
 
 
+# --- Hallucination-prevention: deterministic "not found" detection ---
+#
+# structured_search()'s existing tiers (search_course/search_program/
+# search_faculty) already return a clean `None` the moment nothing
+# matches - but `None` is indistinguishable from "this question doesn't
+# even mention an entity of this kind", so the caller has no way to
+# tell "CP999 looks like a course code, it just isn't a real one" apart
+# from "this question isn't about a course at all". Both used to fall
+# through identically to hybrid_search()'s ungated vector fallback,
+# which will confidently paraphrase whatever 5 chunks happen to be
+# nearest - even if none of them are actually relevant - producing a
+# fabricated answer with a real-looking but wrong citation. The checks
+# below give the three structured entity types a deterministic "not
+# found" message instead, using the same shape/keyword signals already
+# used elsewhere in this file (e.g. domain_guard's own course-code
+# regex) to recognize "this question names an entity of this kind"
+# without touching any of the actual matching logic in search_course/
+# search_program/search_faculty themselves.
+
+# Same course-code shape used by search_course() (line ~320) and
+# domain_guard.COURSE_CODE_PATTERN - duplicated read-only here (not a
+# change to search_course's own matching) purely to distinguish "no
+# course code shape present at all" from "a code-shaped token is
+# present but search_course found no row for it".
+_COURSE_CODE_SHAPE_PATTERN = re.compile(r"\b[A-Z]{2,4}\d{3}[A-Z]?\b")
+
+
+def _course_code_shape(question):
+
+    match = _COURSE_CODE_SHAPE_PATTERN.search(question.upper())
+
+    return match.group() if match else None
+
+
+# A title word is a strong, deliberate signal the user means a specific
+# named person (e.g. "Professor Batman") - unlike a bare capitalized
+# word/phrase, which risks colliding with ordinary proper nouns that
+# aren't attempted faculty names at all (place names, course/program
+# names, etc.), so this stays conservative rather than pattern-matching
+# any Title-Case phrase. The title word itself is matched case-
+# insensitively (inline (?i:...) - scoped to just that alternation), but
+# the captured name is deliberately NOT: it must be genuinely
+# capitalized in the original text. This is what distinguishes "Professor
+# Batman" (a new name attempt - the capitalized word right after the
+# title) from a contextual reference like "that professor" or "Does
+# that professor do AI research?" - lowercase text right after the title
+# word fails to match at all, so this correctly returns None and leaves
+# the question for resolve_contextual_reference (a separate, existing
+# pronoun/type-hint resolver - "that professor" is one of its own
+# reserved patterns) rather than misreading trailing sentence content as
+# an attempted name.
+def _extract_person_query_name(question):
+
+    match = re.search(
+        r"\b(?:(?i:professor|prof|dr)\.?)\s+([A-Z][\w.'-]*(?:\s+[A-Z][\w.'-]*)*)",
+        question
+    )
+
+    return match.group(1).strip() if match else None
+
+
+# A degree-type prefix directly followed by "of"/"in" (e.g. "Bachelor of
+# Space Engineering", "Master in Data Science") is a specific, high-
+# precision shape for "the user is naming a specific program" - deliberately
+# narrower than just checking for the word "program"/"degree" anywhere in
+# the question, which would also fire on generic advice questions ("Which
+# program should I choose?") that aren't naming any real program at all.
+_PROGRAM_NAME_SHAPE_PATTERN = re.compile(
+    r"\b(?:bachelor|master|masters|ph\.?d|doctorate|diploma|certificate)s?"
+    r"\s+(?:of|in)\s+[a-z].*",
+    re.IGNORECASE
+)
+
+
+def _extract_program_query_phrase(question):
+
+    match = _PROGRAM_NAME_SHAPE_PATTERN.search(question)
+
+    if not match:
+        return None
+
+    phrase = match.group().strip().rstrip("?.!")
+
+    return re.sub(r"\s+(?:program|degree)$", "", phrase, flags=re.IGNORECASE).strip()
+
+
 def structured_search(question, memory=None):
 
     # FOLLOWUP MEMORY
@@ -2994,6 +3096,21 @@ Description:
 {_course_metadata_section(result)}"""
 
         return context, result[5], "course"
+
+    # A code-shaped token is present (e.g. "CP999") but search_course()
+    # found no matching row - definitive enough to answer immediately
+    # rather than letting it fall through to the vector fallback, which
+    # has no way to know the code doesn't exist and would otherwise
+    # paraphrase whatever unrelated chunks happen to be nearest.
+    course_code_shape = _course_code_shape(question)
+
+    if course_code_shape:
+        return (
+            f"I couldn't find a course with code {course_code_shape} in "
+            f"the Wilfrid Laurier University data.",
+            None,
+            "not_found"
+        )
 
     # UNDERGRADUATE PROGRAM LIST (Sprint 11B)
     # Checked before the single-program lookup below: "What undergraduate
@@ -3207,6 +3324,44 @@ Research Interests:
             _format_faculty_list_context("Research Topic", topic, faculty_rows),
             None,
             "research"
+        )
+
+    # FACULTY - NOT FOUND
+    # Reaching this point means search_faculty() above already returned
+    # plain None (a real match or an ambiguous-match clarification would
+    # have returned already, back at the FACULTY block). Only fires when
+    # a capitalized name actually follows a title word - a genuine new
+    # name attempt like "Professor Batman" - rather than falling through
+    # to the vector fallback and risking a fabricated profile. A
+    # contextual reference like "that professor" has no name to extract
+    # (see _extract_person_query_name), so it correctly falls through
+    # this check untouched and reaches resolve_contextual_reference (in
+    # app.py, tried after structured_search) instead.
+    attempted_name = _extract_person_query_name(question)
+
+    if attempted_name:
+
+        return (
+            f"I couldn't find a faculty member named {attempted_name} in "
+            f"the Wilfrid Laurier University data.",
+            None,
+            "not_found"
+        )
+
+    # PROGRAM - NOT FOUND
+    # Same reasoning as the course/faculty checks above: reaching here
+    # means search_program() already returned None, so a degree-type-
+    # shaped phrase ("Bachelor of X", "Master in X") is a strong enough
+    # signal that a specific (nonexistent) program was named.
+    program_phrase = _extract_program_query_phrase(question)
+
+    if program_phrase:
+
+        return (
+            f'I couldn\'t find a program called "{program_phrase}" in '
+            f"the Wilfrid Laurier University data.",
+            None,
+            "not_found"
         )
 
     return None
@@ -3596,6 +3751,25 @@ def resolve_contextual_reference(question, memory=None):
     return None
 
 
+# Calibrated against real distances returned by the main
+# wlu_chatbot_chunks collection (same embedding model,
+# all-MiniLM-L6-v2, as the faculty-research collection's own calibrated
+# _RESEARCH_TOPIC_DISTANCE_THRESHOLD, whose approach this mirrors):
+# genuine in-domain questions answerable only through this fallback
+# ("What clubs are available at WLU?", "How much does residence cost?")
+# land at or below ~1.19, while fabricated-entity questions ("What is
+# the tuition for Mars students?") land at ~1.23+. Gates whether the top
+# hit is used at all - the retrieval call itself (search_vector, same
+# n_results=5, same ordering) is unchanged.
+_VECTOR_SEARCH_DISTANCE_THRESHOLD = 1.2
+
+_NO_CONFIDENT_MATCH_MESSAGE = (
+    "I couldn't find reliable information about that in the Wilfrid "
+    "Laurier University data. Could you rephrase your question or ask "
+    "about something more specific?"
+)
+
+
 def hybrid_search(question, memory=None):
 
     result = structured_search(question, memory)
@@ -3608,6 +3782,21 @@ def hybrid_search(question, memory=None):
     results = search_vector(
         question
     )
+
+    top_distance = results["distances"][0][0]
+
+    # Exempt recognized follow-up phrases ("tell me more", "explain",
+    # ...): these carry no semantic content of their own to embed - the
+    # literal phrase itself always retrieves weakly - so the gate would
+    # otherwise misread a normal conversational continuation (already
+    # relying on chat history, not fresh retrieval, for its answer - the
+    # same reason app.py's off-topic gate exempts these) as a low-
+    # confidence "not found" case.
+    if (
+        top_distance > _VECTOR_SEARCH_DISTANCE_THRESHOLD
+        and normalize_followup_text(question) not in FOLLOWUP_PHRASES
+    ):
+        return _NO_CONFIDENT_MATCH_MESSAGE, None, "not_found"
 
     context = "\n\n".join(
         results["documents"][0]

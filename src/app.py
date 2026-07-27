@@ -92,6 +92,13 @@ def is_greeting(text: str) -> bool:
 # clarification message in this project bypasses the LLM (see
 # resolve_contextual_reference): an LLM paraphrase risks dropping or
 # inventing a candidate name.
+#
+# "not_found" added for the same hallucination-prevention reason: every
+# message using this response_type (structured_search's course/faculty/
+# program "not found" checks, and hybrid_search's low-confidence vector
+# gate) is a fixed, already-correct decline with no citation - handing
+# it to the LLM to "answer naturally" would risk exactly the fabrication
+# this response_type exists to prevent.
 DETERMINISTIC_RESPONSE_TYPES = {
     "prerequisite",
     "undergraduate_requirements",
@@ -102,6 +109,7 @@ DETERMINISTIC_RESPONSE_TYPES = {
     "faculty_profile",
     "program",
     "faculty_clarify",
+    "not_found",
 }
 
 
