@@ -315,6 +315,120 @@ PROGRAM_COURSE_REQUIREMENTS_READY = _table_exists(
 )
 
 
+# --- Deterministic course-NAME lookup (course-CODE lookup, above the
+# class definition below, is unchanged and still tried first) ---
+#
+# Bare names under this length collide with ordinary English far too
+# easily (matches _MIN_NAME_TOKEN_LENGTH's identical role in faculty-
+# name matching) - the shortest real course names in the catalog are
+# 4-character instrument names ("Oboe", "Tuba"), so this excludes
+# nothing legitimate while still guarding against degenerate entries.
+_COURSE_NAME_MIN_LENGTH = 4
+
+
+class _AmbiguousCourseMatch:
+    """Sentinel returned by search_course() when a name-based lookup
+    matches more than one distinct course (e.g. "Special Topics" is
+    reused as a generic title by dozens of different departments) - the
+    caller must ask the user to clarify rather than silently picking
+    whichever row happened to come back first from the DB."""
+
+    __slots__ = ("candidates",)
+
+    def __init__(self, candidates):
+        self.candidates = candidates
+
+
+def _search_course_by_name(question, memory=None):
+
+    conn = sqlite3.connect(
+        "data/courses.db"
+    )
+
+    conn.row_factory = sqlite3.Row
+
+    cursor = conn.cursor()
+
+    level_column = ", level" if COURSES_HAVE_LEVEL else ""
+
+    cursor.execute(f"""
+    SELECT
+        course_code,
+        course_name,
+        credits,
+        description,
+        department_name,
+        source_url
+        {level_column},
+        prerequisites_text,
+        corequisites_text,
+        exclusions_text,
+        location_text,
+        notes_text
+    FROM courses
+    WHERE course_name IS NOT NULL
+    """)
+
+    rows = cursor.fetchall()
+
+    conn.close()
+
+    question_lower = question.lower()
+
+    # Every distinct course name that appears as a whole-phrase,
+    # word-boundary-bounded match in the question - e.g. "Operating
+    # Systems" matches both the bare query and "Tell me about Operating
+    # Systems", but never matches as a fragment inside an unrelated
+    # word.
+    matched_names = set()
+
+    for row in rows:
+
+        name = (row["course_name"] or "").strip()
+
+        if len(name) < _COURSE_NAME_MIN_LENGTH:
+            continue
+
+        if re.search(rf"\b{re.escape(name.lower())}\b", question_lower):
+            matched_names.add(name)
+
+    # Keep only maximal matches: a generic name that's also a substring
+    # of a more specific name that ALSO matched (e.g. a course literally
+    # named "Thesis" would otherwise also register whenever the question
+    # says "Master's Thesis") is strictly less specific and gets
+    # dropped, rather than inflating the ambiguity count with a name the
+    # user didn't actually type.
+    maximal_names = {
+        name for name in matched_names
+        if not any(
+            name != other and name.lower() in other.lower()
+            for other in matched_names
+        )
+    }
+
+    if not maximal_names:
+        return None
+
+    candidates = [
+        row for row in rows
+        if (row["course_name"] or "").strip() in maximal_names
+    ]
+
+    if len(candidates) > 1:
+        return _AmbiguousCourseMatch(candidates)
+
+    row = candidates[0]
+
+    if memory is not None:
+        memory["last_course"] = row[0]
+        _record_entity(
+            memory, "course", row[0], f"{row[0]} - {row[1]}",
+            "search_course",
+        )
+
+    return row
+
+
 def search_course(question, memory=None):
 
     course_match = re.search(
@@ -1176,6 +1290,26 @@ _BARE_REFERENCE_WORDS = {
     "them", "they", "him", "her", "he", "she",
 }
 
+# Matches a bare reference word as the FIRST word of the captured text,
+# not just when the captured text is exactly one of these words alone.
+# A compound query like "...and who teaches it and what are the
+# prerequisites?" captures "it and what are the prerequisites" here -
+# the old exact-equality check against _BARE_REFERENCE_WORDS missed this
+# (the captured text isn't *exactly* "it"), so the leading pronoun was
+# treated as a literal course-name candidate, which then failed to
+# match anything and produced a false "no course found" - even when the
+# course (e.g. CP104, named earlier in the same sentence) genuinely
+# exists and search_course()'s own code-shape regex would have found it
+# moments later in the cascade, if this hadn't already claimed the
+# query with a wrong answer. Requiring only a LEADING pronoun (still
+# followed by a word boundary, so "them" doesn't wrongly match inside
+# "themed") correctly declines this compound case too, letting the
+# question fall through to whichever capability actually can answer it.
+_BARE_REFERENCE_LEADING_PATTERN = re.compile(
+    r"^(?:" + "|".join(re.escape(w) for w in _BARE_REFERENCE_WORDS) + r")\b",
+    re.IGNORECASE
+)
+
 
 def _extract_taught_query(question):
 
@@ -1186,10 +1320,13 @@ def _extract_taught_query(question):
 
     captured = match.group(1).strip().rstrip("?.!, ")
 
-    if captured.lower() in _BARE_REFERENCE_WORDS:
+    if not captured:
         return None
 
-    return captured or None
+    if _BARE_REFERENCE_LEADING_PATTERN.match(captured):
+        return None
+
+    return captured
 
 
 def search_faculty_courses_taught(question, memory=None):
@@ -3081,6 +3218,42 @@ def _course_metadata_section(result):
     return "\n" + "\n".join(lines) + "\n"
 
 
+def _course_card_response(result):
+
+    context = f"""
+Course Code: {result[0]}
+Course Name: {result[1]}
+Credits: {result[2]}
+Department: {result[4]}
+{_course_level_line(result)}
+Description:
+{result[3]}
+{_course_metadata_section(result)}"""
+
+    return context, result[5], "course"
+
+
+def _course_clarify_response(candidates):
+
+    pairs = sorted({(row[0], row[1]) for row in candidates})
+
+    if len(pairs) > 6:
+        names_text = (
+            ", ".join(code for code, name in pairs[:6])
+            + f", and {len(pairs) - 6} more"
+        )
+    else:
+        names_text = ", ".join(f"{code} ({name})" for code, name in pairs)
+
+    return (
+        "I'm not sure which course you mean - I found multiple "
+        f"matching courses: {names_text}. Could you mention the "
+        "course code or department?",
+        None,
+        "course_clarify"
+    )
+
+
 def _format_faculty_list_context(label, name, rows):
 
     total = len(rows)
@@ -3267,18 +3440,7 @@ def structured_search(question, memory=None):
     result = search_course(question, memory)
 
     if result:
-
-        context = f"""
-Course Code: {result[0]}
-Course Name: {result[1]}
-Credits: {result[2]}
-Department: {result[4]}
-{_course_level_line(result)}
-Description:
-{result[3]}
-{_course_metadata_section(result)}"""
-
-        return context, result[5], "course"
+        return _course_card_response(result)
 
     # A code-shaped token is present (e.g. "CP999") but search_course()
     # found no matching row - definitive enough to answer immediately
@@ -3549,6 +3711,27 @@ Research Interests:
             None,
             "not_found"
         )
+
+    # COURSE NAME (last resort)
+    # Tried dead last, after every other structured capability above -
+    # course-name matching (a bare substring match against the entire
+    # ~4600-row catalog) is the least specific signal in this whole
+    # cascade, even less specific than the embedding-based research-topic
+    # search above it: plenty of ordinary department/research/program
+    # words are ALSO literal course titles ("Marketing", "Economics",
+    # "Machine Learning", "Consumer Behaviour" all are real course
+    # names) - confirmed live, this preempted "Who works in Marketing?"
+    # and "Who researches machine learning?" when tried earlier in the
+    # cascade, a regression caught during verification and moved here
+    # rather than shipped. Only reached once nothing above already
+    # answered the question.
+    course_name_result = _search_course_by_name(question, memory)
+
+    if isinstance(course_name_result, _AmbiguousCourseMatch):
+        return _course_clarify_response(course_name_result.candidates)
+
+    if course_name_result:
+        return _course_card_response(course_name_result)
 
     return None
 

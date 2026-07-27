@@ -99,6 +99,11 @@ def is_greeting(text: str) -> bool:
 # gate) is a fixed, already-correct decline with no citation - handing
 # it to the LLM to "answer naturally" would risk exactly the fabrication
 # this response_type exists to prevent.
+#
+# "course_clarify" added for the same reason as "faculty_clarify": a
+# multi-candidate course-NAME disambiguation message (structured_search's
+# COURSE branch, retriever.py) is shown verbatim so an LLM paraphrase
+# can't drop or invent a candidate course code.
 DETERMINISTIC_RESPONSE_TYPES = {
     "prerequisite",
     "undergraduate_requirements",
@@ -110,6 +115,7 @@ DETERMINISTIC_RESPONSE_TYPES = {
     "program",
     "faculty_clarify",
     "not_found",
+    "course_clarify",
 }
 
 
