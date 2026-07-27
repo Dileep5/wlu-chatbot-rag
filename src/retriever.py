@@ -2472,41 +2472,66 @@ def _collect_single_name_matches(rows, question_lower, token_index):
     return matches
 
 
-# At most a first+last name (e.g. "Ranaweer", "Chatura Ranweera") - short
-# enough that the message is almost certainly the name attempt itself,
-# with no surrounding sentence to signal intent, so any casing is
-# accepted. This has to stay genuinely short: ordinary short questions
-# ("Does it have prerequisites?", "What's your favorite movie?") also
-# fall under a few words, and without the capitalization gate below,
-# their ordinary words collide with real names at edit-distance 1
-# ("have"->"Dave", "movie"->an unrelated surname) - both reproduced
-# false positives that pushed this threshold down from a looser one.
-# Above this length, capitalization (skipping the sentence-initial word,
-# capitalized by convention regardless of content) is the only cheap
-# signal that a word is a proper noun and not an ordinary English word
-# that happens to be one edit away from a real surname (also reproduced:
-# "tell"->"Bell", "list"/"write"->"Lisa"/"White").
-_BARE_NAME_QUERY_MAX_WORDS = 2
+# Conversational scaffolding stripped before judging whether what's left
+# of the question is short enough to treat as a bare name attempt (any
+# casing accepted) for fuzzy matching - the same filler-stripping idea
+# already used for department-list residual matching
+# (_DEPARTMENT_LIST_FILLER_WORDS/_department_list_residual above), here
+# applied to person-lookup phrasing specifically. Stripping these first
+# (rather than relying on capitalization or word count alone) is what
+# lets "Who is mahmoodd?" and "Tell me about ranawera" resolve via typo
+# tolerance without capitalization - and is also what keeps an auxiliary
+# verb like "have" out of consideration entirely, rather than accidentally
+# surviving into a fuzzy comparison and colliding with a real name at
+# edit-distance 1 ("have" -> "Dave" - a reproduced false positive).
+_NAME_QUERY_FILLER_WORDS = _DEPARTMENT_LIST_FILLER_WORDS | {
+    "does", "did", "do", "has", "have", "having", "can", "could", "would",
+    "will", "shall", "should", "it", "its", "this", "that", "these",
+    "those", "you", "your", "yours", "he", "she", "him", "her", "his",
+    "hers", "they", "them", "their", "a", "an", "and", "or", "to",
+    "taught", "teaching", "know", "name", "person",
+    # Ordinal follow-up vocabulary (_ORDINAL_PATTERN/_ORDINAL_POSITIONS
+    # below) - "the first one" is a reserved phrase resolved
+    # deterministically by entity-history ordinal resolution, tried only
+    # after structured_search (and thus this function) already returns
+    # None. Without these stripped, "first" - a common English word -
+    # collides with the real surname "Kirst" at edit-distance 1, a
+    # reproduced false positive that made search_faculty wrongly resolve
+    # before ordinal resolution ever got a chance to run.
+    "first", "second", "third", "fourth", "fifth", "last", "one",
+}
+
+# At most a first+middle+last name's worth of actual content - short
+# enough that the residual (question words minus filler) is almost
+# certainly the name attempt itself, so any casing is accepted. A longer
+# residual means the question has substantial content beyond scaffolding
+# (e.g. "your favorite movie", "the latest Super Bowl champion") - there,
+# capitalization (skipping the sentence-initial word, capitalized by
+# convention regardless of content) is the only cheap signal left that a
+# word is a proper noun and not an ordinary English word that happens to
+# be one edit away from a real surname (reproduced false positives
+# without this gate: "tell" -> "Bell", "list"/"write" -> "Lisa"/"White").
+_BARE_NAME_RESIDUAL_MAX_WORDS = 3
 
 
 def _fuzzy_candidate_words(question, question_lower):
 
-    trimmed_words = question.strip().rstrip(_FOLLOWUP_TRAILING_PUNCTUATION).split()
+    words = re.findall(r"[a-z]+", question_lower)
+    residual = [word for word in words if word not in _NAME_QUERY_FILLER_WORDS]
 
-    if trimmed_words and len(trimmed_words) <= _BARE_NAME_QUERY_MAX_WORDS:
-        words = _strip_person_titles(question_lower).split()
+    if residual and len(residual) <= _BARE_NAME_RESIDUAL_MAX_WORDS:
+        candidates = residual
     else:
         # Skip index 0: the sentence-initial word is capitalized by
         # convention regardless of whether it's a proper noun, so it
-        # carries no signal here (this is exactly what let "Tell me
-        # about the history of coffee." false-positive on "Bell" above).
-        words = [
+        # carries no signal here.
+        candidates = [
             word.lower()
             for index, word in enumerate(re.findall(r"[A-Za-z']+", question))
             if index > 0 and word[:1].isupper()
         ]
 
-    return [word for word in words if len(word) >= _MIN_NAME_TOKEN_LENGTH]
+    return [word for word in candidates if len(word) >= _MIN_NAME_TOKEN_LENGTH]
 
 
 def _collect_fuzzy_name_matches(rows, question, question_lower):
