@@ -3,6 +3,7 @@ import sqlite3
 import re
 from collections import deque
 import chromadb
+from rapidfuzz.distance import Levenshtein
 from sentence_transformers import SentenceTransformer
 
 DB_DIR = "data/vector_db"
@@ -1427,6 +1428,15 @@ def search_faculty_courses_by_topic(question, memory=None):
     # suffixes and surrounding text robustly and shouldn't be duplicated.
     person_row = search_faculty(question, memory)
 
+    if isinstance(person_row, _AmbiguousFacultyMatch):
+        names = sorted({row[0] for row in person_row.candidates})
+        return (
+            "I'm not sure which professor you mean - I found multiple "
+            f"faculty members matching that name: {', '.join(names)}. "
+            "Could you provide a full name?",
+            None
+        )
+
     if not person_row:
         return (
             "I couldn't identify a specific faculty member in that "
@@ -2071,21 +2081,16 @@ def search_department(question, memory=None):
     return None
 
 
-# Common title words - stripped for name matching, and required (alongside
-# a capitalized surname) for the surname-only fallback tier below.
-_PERSON_TITLE_WORDS = ["dr.", "dr", "professor", "prof.", "prof"]
-
-
 def _strip_person_titles(text):
 
     text = text.lower()
 
-    # Matched separately from _PERSON_TITLE_WORDS: a trailing "\b" after an
-    # escaped period never matches (a period followed by a space has no
-    # word boundary on either side), which left a stray "." behind and
-    # broke the substring match this function exists to enable. The "X."
-    # alternative has no trailing boundary requirement - the literal
-    # period is itself an unambiguous delimiter.
+    # A trailing "\b" after an escaped period never matches (a period
+    # followed by a space has no word boundary on either side), which
+    # left a stray "." behind and broke the substring match this function
+    # exists to enable. The "X." alternative has no trailing boundary
+    # requirement - the literal period is itself an unambiguous
+    # delimiter.
     text = re.sub(r"\bdr\.|\bdr\b", " ", text)
     text = re.sub(r"\bprof\.|\bprof\b", " ", text)
     text = re.sub(r"\bprofessor\b", " ", text)
@@ -2345,6 +2350,203 @@ def search_faculty_by_faculty_name(question, memory=None):
     return matched_segment, display_rows
 
 
+# Maximum Levenshtein (insert/delete/substitute) distance for a question
+# word to count as a typo of a stored first/last name, e.g.
+# "Mahmod"/"Mahmood" or "Gose"/"Ghose" (both distance 1). Deliberately an
+# absolute edit-distance cutoff rather than a similarity ratio: a ratio
+# threshold (e.g. rapidfuzz.fuzz.ratio >= 85) also scores unrelated
+# same-prefix words as near-matches - "weather" vs the surname
+# "Weatherby" scores 87.5 despite being a real, reproduced false
+# positive (an off-topic "What's the weather like today?" question
+# routed to a faculty profile). Edit distance <=1 still catches every
+# genuine single-character typo above while rejecting that case (its
+# distance is 2). Only ever consulted as a last resort, after every
+# exact tier below has already found nothing.
+_MAX_NAME_TYPO_DISTANCE = 1
+
+# Below this length a name token is either too short to reliably
+# distinguish from an ordinary English word (whole-word tiers) or too
+# short for edit-distance similarity to be meaningful (the fuzzy tier) -
+# a 1-2 character typo in a 3-letter name changes its meaning entirely.
+_MIN_NAME_TOKEN_LENGTH = 4
+
+
+def _person_name_tokens(name):
+
+    # Same normalization used everywhere else a stored faculty name is
+    # compared against question text: drop trailing credentials ("
+    # PhD"), then title words, then lowercase - so "Dr. Jane A. Doe,
+    # PhD" and a bare question mention of "Jane" or "Doe" line up.
+    return _strip_person_titles(_strip_credentials(name).lower()).split()
+
+
+class _AmbiguousFacultyMatch:
+    """Sentinel returned by search_faculty() when a name fragment (e.g. a
+    shared surname) matches more than one distinct faculty member - the
+    caller must ask the user to clarify rather than silently picking
+    whichever row happened to come back first from the DB."""
+
+    __slots__ = ("candidates",)
+
+    def __init__(self, candidates):
+        self.candidates = candidates
+
+
+def _dedupe_faculty_rows(rows):
+
+    # source_url (row[9]) is the stable per-person key used everywhere
+    # else in this file (memory, entity history) - deduping on it here
+    # means a person who matched more than one tier's own internal check
+    # is never mistaken for two different "candidates".
+    unique = {}
+
+    for row in rows:
+        unique.setdefault(row[9], row)
+
+    return list(unique.values())
+
+
+def _collect_full_name_matches(rows, normalized_question):
+
+    matches = []
+
+    for row in rows:
+
+        normalized_name = _strip_person_titles(_strip_credentials(row[0]).lower())
+
+        if len(normalized_name) >= _MIN_NAME_TOKEN_LENGTH and normalized_name in normalized_question:
+            matches.append(row)
+
+    return matches
+
+
+def _collect_first_and_last_matches(rows, question_lower):
+
+    matches = []
+
+    for row in rows:
+
+        name_parts = _person_name_tokens(row[0])
+
+        if len(name_parts) < 2:
+            continue
+
+        first_name, last_name = name_parts[0], name_parts[-1]
+
+        if len(first_name) < 3 or len(last_name) < 3:
+            continue
+
+        first_pattern = rf"\b{re.escape(first_name)}\b"
+        last_pattern = rf"\b{re.escape(last_name)}\b"
+
+        if re.search(first_pattern, question_lower) and re.search(last_pattern, question_lower):
+            matches.append(row)
+
+    return matches
+
+
+def _collect_single_name_matches(rows, question_lower, token_index):
+
+    # token_index=0 -> first name only, token_index=-1 -> last name only.
+    # No title word is required (unlike the old surname-only tier) so a
+    # bare "Mahmood" or "Ranaweera" - with no "Professor"/"Dr." anywhere
+    # in the question - still resolves; the disambiguation step below is
+    # what keeps a shared/common name from being silently guessed.
+    matches = []
+
+    for row in rows:
+
+        name_parts = _person_name_tokens(row[0])
+
+        if not name_parts:
+            continue
+
+        name_token = name_parts[token_index]
+
+        if len(name_token) < _MIN_NAME_TOKEN_LENGTH:
+            continue
+
+        if re.search(rf"\b{re.escape(name_token)}\b", question_lower):
+            matches.append(row)
+
+    return matches
+
+
+# At most a first+last name (e.g. "Ranaweer", "Chatura Ranweera") - short
+# enough that the message is almost certainly the name attempt itself,
+# with no surrounding sentence to signal intent, so any casing is
+# accepted. This has to stay genuinely short: ordinary short questions
+# ("Does it have prerequisites?", "What's your favorite movie?") also
+# fall under a few words, and without the capitalization gate below,
+# their ordinary words collide with real names at edit-distance 1
+# ("have"->"Dave", "movie"->an unrelated surname) - both reproduced
+# false positives that pushed this threshold down from a looser one.
+# Above this length, capitalization (skipping the sentence-initial word,
+# capitalized by convention regardless of content) is the only cheap
+# signal that a word is a proper noun and not an ordinary English word
+# that happens to be one edit away from a real surname (also reproduced:
+# "tell"->"Bell", "list"/"write"->"Lisa"/"White").
+_BARE_NAME_QUERY_MAX_WORDS = 2
+
+
+def _fuzzy_candidate_words(question, question_lower):
+
+    trimmed_words = question.strip().rstrip(_FOLLOWUP_TRAILING_PUNCTUATION).split()
+
+    if trimmed_words and len(trimmed_words) <= _BARE_NAME_QUERY_MAX_WORDS:
+        words = _strip_person_titles(question_lower).split()
+    else:
+        # Skip index 0: the sentence-initial word is capitalized by
+        # convention regardless of whether it's a proper noun, so it
+        # carries no signal here (this is exactly what let "Tell me
+        # about the history of coffee." false-positive on "Bell" above).
+        words = [
+            word.lower()
+            for index, word in enumerate(re.findall(r"[A-Za-z']+", question))
+            if index > 0 and word[:1].isupper()
+        ]
+
+    return [word for word in words if len(word) >= _MIN_NAME_TOKEN_LENGTH]
+
+
+def _collect_fuzzy_name_matches(rows, question, question_lower):
+
+    # Last-resort typo tolerance: only reached once every exact tier
+    # above has matched nothing at all. Compares each candidate word in
+    # the question against every faculty member's first and last name
+    # using edit-distance, so a small misspelling like "Ranaweer" or
+    # "Gose" still resolves instead of falling through to semantic/
+    # vector search.
+    question_words = _fuzzy_candidate_words(question, question_lower)
+
+    if not question_words:
+        return []
+
+    matches = []
+
+    for row in rows:
+
+        name_parts = _person_name_tokens(row[0])
+
+        name_tokens = {
+            token for token in (name_parts[0], name_parts[-1])
+            if name_parts and len(token) >= _MIN_NAME_TOKEN_LENGTH
+        } if name_parts else set()
+
+        for name_token in name_tokens:
+
+            if any(
+                Levenshtein.distance(
+                    name_token, word, score_cutoff=_MAX_NAME_TYPO_DISTANCE
+                ) <= _MAX_NAME_TYPO_DISTANCE
+                for word in question_words
+            ):
+                matches.append(row)
+                break
+
+    return matches
+
+
 def search_faculty(question, memory=None):
 
     if not FACULTY_DB_READY:
@@ -2376,91 +2578,52 @@ def search_faculty(question, memory=None):
     conn.close()
 
     question_lower = question.lower()
-
-    # Tier 1: title-stripped full-name substring match (highest priority).
     normalized_question = _strip_person_titles(question_lower)
 
-    for row in rows:
+    # Tiers are tried in order of specificity/confidence; the first tier
+    # that matches anything at all wins outright (no falling through to a
+    # looser tier just because a stricter one only found one candidate).
+    candidates = []
 
-        normalized_name = _strip_person_titles(_strip_credentials(row[0]).lower())
+    for tier_matches in (
+        # Tier 1: title-stripped full-name substring match.
+        _collect_full_name_matches(rows, normalized_question),
+        # Tier 2: first name AND last name both present as whole words,
+        # in any order (e.g. "Tell me about Louise Dawe" - no title, and
+        # the stored "Dr. Louise N. Dawe" won't substring-match because
+        # of the middle initial).
+        _collect_first_and_last_matches(rows, question_lower),
+        # Tier 3: last name only (e.g. "Mahmood", "Ranaweera").
+        _collect_single_name_matches(rows, question_lower, -1),
+        # Tier 4: first name only.
+        _collect_single_name_matches(rows, question_lower, 0),
+    ):
+        if tier_matches:
+            candidates = tier_matches
+            break
 
-        if len(normalized_name) >= 4 and normalized_name in normalized_question:
+    # Tier 5: fuzzy/typo tolerance - only consulted once nothing above
+    # matched at all.
+    if not candidates:
+        candidates = _collect_fuzzy_name_matches(rows, question, question_lower)
 
-            if memory is not None:
-                memory["last_faculty"] = row[0]
-                _record_entity(memory, "faculty", row[9], row[0], "search_faculty")
-                if row[3]:
-                    _record_entity(memory, "department", row[3], row[3], "search_faculty")
+    if not candidates:
+        return None
 
-            return row
+    candidates = _dedupe_faculty_rows(candidates)
 
-    # Tier 2: fallback - first name AND last name both present, capitalized,
-    # as whole words in the original question (e.g. "Tell me about Louise
-    # Dawe" - no title, and the stored "Dr. Louise N. Dawe" won't substring
-    # -match because of the middle initial). No title word required here,
-    # but requiring two independent capitalized-word matches (rather than
-    # one) keeps false-positive risk low without needing a title as a
-    # safety net.
-    for row in rows:
+    if len(candidates) > 1:
+        return _AmbiguousFacultyMatch(candidates)
 
-        name_parts = _strip_person_titles(_strip_credentials(row[0]).lower()).split()
+    row = candidates[0]
 
-        if len(name_parts) < 2:
-            continue
+    if memory is not None:
+        memory["last_faculty"] = row[0]
+        _record_entity(memory, "faculty", row[9], row[0], "search_faculty")
+        if row[3]:
+            _record_entity(memory, "department", row[3], row[3], "search_faculty")
 
-        first_name, last_name = name_parts[0], name_parts[-1]
-
-        if len(first_name) < 3 or len(last_name) < 3:
-            continue
-
-        first_pattern = rf"\b{re.escape(first_name.capitalize())}\b"
-        last_pattern = rf"\b{re.escape(last_name.capitalize())}\b"
-
-        if re.search(first_pattern, question) and re.search(last_pattern, question):
-
-            if memory is not None:
-                memory["last_faculty"] = row[0]
-                _record_entity(memory, "faculty", row[9], row[0], "search_faculty")
-                if row[3]:
-                    _record_entity(memory, "department", row[3], row[3], "search_faculty")
-
-            return row
-
-    # Tier 3: fallback - surname only (e.g. "Who is Professor Ghose?").
-    # Requires BOTH a title word present in the question AND the surname
-    # appearing capitalized as a whole word in the ORIGINAL (non-lowercased)
-    # question. Plain case-insensitive surname matching would collide with
-    # ordinary English words that are also real surnames here (e.g. "Gates",
-    # "Long") - the same lesson learned from acronym matching for programs.
-    has_title_word = any(
-        re.search(rf"\b{re.escape(word)}\b", question_lower)
-        for word in _PERSON_TITLE_WORDS
-    )
-
-    if has_title_word:
-
-        for row in rows:
-
-            name_parts = _strip_credentials(row[0]).strip().split()
-
-            if not name_parts:
-                continue
-
-            surname = name_parts[-1]
-
-            if len(surname) >= 3 and re.search(
-                rf"\b{re.escape(surname)}\b", question
-            ):
-
-                if memory is not None:
-                    memory["last_faculty"] = row[0]
-                    _record_entity(memory, "faculty", row[9], row[0], "search_faculty")
-                    if row[3]:
-                        _record_entity(memory, "department", row[3], row[3], "search_faculty")
-
-                return row
-
-    return None
+    return row
 
 
 # Deterministic research-topic intent detection - same style as the
@@ -2967,6 +3130,19 @@ Description:
     # FACULTY
 
     result = search_faculty(question, memory)
+
+    if isinstance(result, _AmbiguousFacultyMatch):
+
+        names = sorted({row[0] for row in result.candidates})
+
+        return (
+            "I'm not sure which professor you mean - I found multiple "
+            f"faculty members matching that name: {', '.join(names)}. "
+            "Could you provide a full name or more detail (e.g. their "
+            "department)?",
+            None,
+            "faculty_clarify"
+        )
 
     if result:
 

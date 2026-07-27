@@ -85,6 +85,13 @@ def is_greeting(text: str) -> bool:
 # "undergraduate_program_list" is a bulleted list of many programs, not
 # a single program's fields - the card can't apply to it regardless, so
 # it's deliberately left on the LLM path, unchanged.
+#
+# "faculty_clarify" added so a multi-candidate faculty-name
+# disambiguation message (structured_search's FACULTY branch,
+# retriever.py) is shown verbatim - the same reason every other
+# clarification message in this project bypasses the LLM (see
+# resolve_contextual_reference): an LLM paraphrase risks dropping or
+# inventing a candidate name.
 DETERMINISTIC_RESPONSE_TYPES = {
     "prerequisite",
     "undergraduate_requirements",
@@ -94,6 +101,7 @@ DETERMINISTIC_RESPONSE_TYPES = {
     "course",
     "faculty_profile",
     "program",
+    "faculty_clarify",
 }
 
 
