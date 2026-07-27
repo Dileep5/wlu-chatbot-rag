@@ -2058,7 +2058,8 @@ def search_department(question, memory=None):
         description,
         source_url
         {level_column},
-        coordinator
+        coordinator,
+        faculty_name
     FROM departments
     """)
 
@@ -2804,6 +2805,188 @@ def search_faculty_by_research_topic(question, memory=None):
     return topic, display_rows
 
 
+# --- Retrieval quality: metadata-aware reranking ---
+#
+# search_vector()'s Chroma .query() only ever orders by raw embedding
+# distance, which regularly promotes a semantically-nearby-but-wrong
+# page (e.g. a news article that happens to mention "scholarship" once)
+# over the page whose title/URL is actually about the query's topic -
+# and never discounts a chunk that's half navigation/footer boilerplate,
+# since chunk.py splits every page into fixed 300-word windows with no
+# page-structure awareness at all (a chunk can start mid-nav-list and
+# end mid-paragraph). _rerank_vector_candidates() re-scores a WIDER
+# candidate pool than what's finally used, adjusting raw distance using
+# the two metadata fields actually available on every chunk (title,
+# url - see build_vector_db.py) plus literal boilerplate-text
+# detection. It never touches the embedding model or the Chroma index
+# itself - only the order/selection of what search_vector() already
+# retrieved - and it never runs for anything structured_search() already
+# answered, so deterministic routing is completely unaffected.
+
+# Retrieve more candidates than will actually be used so reranking has
+# real material to promote a better-matching page from beyond the
+# original top 5.
+_VECTOR_CANDIDATE_POOL_SIZE = 15
+
+# Both patterns are literal, highly-reliable markers of nav/footer text
+# that leaked into a content chunk (scrape.py strips <nav>/<footer> tags,
+# but "Skip to main content" / "In this section" link lists and the
+# cookie-consent banner are rendered outside those tags on wlu.ca, so
+# they survive into the scraped body text - see scrape.py/chunk.py).
+# Each hit adds a rank penalty (requirement: nav/footer chunks should
+# "rank much lower"), rather than trying to surgically cut the matched
+# text out of the middle of an otherwise-real content chunk, which risks
+# mangling real prose given chunks have no paragraph/sentence boundaries
+# preserved to cut cleanly along.
+_BOILERPLATE_RANK_PATTERNS = [
+    re.compile(r"skip to main content", re.IGNORECASE),
+    re.compile(r"we use cookies on this site", re.IGNORECASE),
+    re.compile(r"\bin this section\b", re.IGNORECASE),
+]
+_BOILERPLATE_RANK_PENALTY = 0.08
+
+# A news article is rarely the authoritative page for a general topic
+# question ("Scholarships" should prefer a scholarships/financial-aid
+# program page over a story about one student's award) - a mild,
+# non-dominant penalty so a genuinely on-topic non-news page always wins
+# when one exists, without completely hiding a news article that turns
+# out to be the ONLY chunk in the corpus actually related to the topic.
+_NEWS_URL_PATTERN = re.compile(r"/news/", re.IGNORECASE)
+_NEWS_RANK_PENALTY = 0.15
+
+# Weighted well above the boilerplate/news penalties above so a genuine
+# title/URL topic match always outranks a merely-shorter-distance,
+# topically-unrelated page (calibrated live: without this, e.g. "Mars"-
+# unrelated candidates could still out-rank a real keyword-matched news
+# article once boilerplate+news penalties stacked against it).
+_TITLE_URL_MATCH_BONUS = 0.35
+
+# Generic connector/question words carry no topic signal - reused here
+# rather than redefined, since the intent is identical to why they're
+# filtered for faculty-name matching.
+_RERANK_STOPWORDS = _DEPARTMENT_LIST_FILLER_WORDS | {
+    "what", "which", "where", "when", "why", "how", "does", "do", "is",
+    "are", "tell", "me", "please", "information", "i", "you", "your",
+}
+
+# Ubiquitous WLU site-structure words - "academic"/"academics" alone sits
+# in roughly half the URL tree (everything under /academics/...),
+# "program(s)" and "faculty/faculties" are similarly broad, and every
+# single title ends "| Wilfrid Laurier University" - a match against any
+# of these carries essentially no discriminating signal and previously
+# caused spurious wins (e.g. "Academic Deadlines" matching almost any
+# /academics/... page purely via "academic", regardless of whether it
+# had anything to do with deadlines). Excluded from keyword-match credit
+# entirely; a real topic word (scholarship, admission, tuition, ...)
+# is never in this set.
+_GENERIC_URL_WORDS = {
+    "academic", "academics", "program", "programs", "faculty", "faculties",
+    "university", "laurier", "wilfrid", "index", "html", "future", "www",
+    "wlu",
+}
+
+
+def _significant_question_words(question):
+
+    words = re.findall(r"[a-z]+", question.lower())
+
+    return [word for word in words if word not in _RERANK_STOPWORDS and len(word) >= 3]
+
+
+def _normalize_rerank_word(word):
+
+    # Naive singular/plural folding ("admissions" <-> "admission") - not
+    # a full stemmer, but sufficient for the plain English topic words
+    # this is matching against.
+    return word[:-1] if word.endswith("s") and len(word) > 3 else word
+
+
+def _url_title_keyword_set(title, url):
+
+    title_words = re.findall(r"[a-z]+", (title or "").lower())
+    url_words = re.findall(r"[a-z]+", (url or "").lower())
+
+    tokens = {_normalize_rerank_word(w) for w in title_words + url_words}
+
+    return tokens - _GENERIC_URL_WORDS
+
+
+def _title_url_match_count(question_words, title, url):
+
+    keyword_set = _url_title_keyword_set(title, url)
+
+    return sum(1 for word in question_words if _normalize_rerank_word(word) in keyword_set)
+
+
+def _boilerplate_hit_count(text):
+
+    return sum(1 for pattern in _BOILERPLATE_RANK_PATTERNS if pattern.search(text))
+
+
+# Only the cookie-consent sentence is stripped from context text shown
+# to the LLM - it's a fixed, exact, repeated phrase safe to remove
+# verbatim (see scrape.py's comment on why it survives tag-stripping).
+# The "Skip to main content ... In this section ..." nav-list prefix is
+# deliberately NOT text-stripped here for the same reason noted above
+# (_BOILERPLATE_RANK_PATTERNS): it has no reliable end boundary to cut
+# along without risking real content, so it's handled by rank penalty
+# only, not text surgery.
+_COOKIE_BANNER_PATTERN = re.compile(
+    r"We use cookies on this site to enhance your experience\. By "
+    r"selecting [“\"]Accept[”\"] and continuing to use this "
+    r"website, you consent to the use of cookies\. Accept",
+    re.IGNORECASE
+)
+
+
+def _strip_known_boilerplate_text(text):
+
+    return re.sub(r"\s+", " ", _COOKIE_BANNER_PATTERN.sub(" ", text)).strip()
+
+
+def _rerank_vector_candidates(question, results):
+
+    documents = results["documents"][0]
+    metadatas = results["metadatas"][0]
+    distances = results["distances"][0]
+
+    question_words = _significant_question_words(question)
+
+    # Keep only the best-scoring chunk per URL - Chroma's wider candidate
+    # pool often contains two adjacent chunks of the same page at
+    # near-identical distance (chunk.py's fixed-window chunking), which
+    # would otherwise consume multiple final slots with the same source.
+    best_per_url = {}
+
+    for document, metadata, distance in zip(documents, metadatas, distances):
+
+        url = metadata.get("url")
+
+        score = distance
+        score += _boilerplate_hit_count(document) * _BOILERPLATE_RANK_PENALTY
+
+        if _NEWS_URL_PATTERN.search(url or ""):
+            score += _NEWS_RANK_PENALTY
+
+        score -= (
+            _title_url_match_count(question_words, metadata.get("title"), url)
+            * _TITLE_URL_MATCH_BONUS
+        )
+
+        candidate = {
+            "score": score,
+            "distance": distance,
+            "document": document,
+            "url": url,
+            "title": metadata.get("title"),
+        }
+
+        if url not in best_per_url or score < best_per_url[url]["score"]:
+            best_per_url[url] = candidate
+
+    return sorted(best_per_url.values(), key=lambda c: c["score"])
+
+
 def search_vector(question):
 
     embedding = model.encode(
@@ -2812,7 +2995,7 @@ def search_vector(question):
 
     results = collection.query(
         query_embeddings=[embedding],
-        n_results=5
+        n_results=_VECTOR_CANDIDATE_POOL_SIZE
     )
 
     return results
@@ -3236,8 +3419,11 @@ Description:
 
     if result:
 
+        faculty_name = result["faculty_name"]
+
         context = f"""
 Department: {result[0]}
+{f"Faculty: {faculty_name.strip()}" if faculty_name and faculty_name.strip() else ""}
 {_department_level_line(result)}
 Programs:
 {result[1]}
@@ -3783,7 +3969,20 @@ def hybrid_search(question, memory=None):
         question
     )
 
-    top_distance = results["distances"][0][0]
+    ranked = _rerank_vector_candidates(question, results)
+
+    top = ranked[0]
+
+    # The confidence gate itself is unchanged - same threshold, same
+    # message, same follow-up exemption, same comparison basis (a raw,
+    # un-penalized embedding distance). Reranking only changes WHICH
+    # candidate is "the top result" the gate evaluates; it never changes
+    # the gate's own logic. Using top["distance"] (not top["score"], which
+    # includes the boilerplate/news/keyword adjustments used only to pick
+    # the winner) keeps that comparison basis identical to before -
+    # ranking quality and confidence gating are two independent concerns
+    # that happen to compose here.
+    top_distance = top["distance"]
 
     # Exempt recognized follow-up phrases ("tell me more", "explain",
     # ...): these carry no semantic content of their own to embed - the
@@ -3798,12 +3997,21 @@ def hybrid_search(question, memory=None):
     ):
         return _NO_CONFIDENT_MATCH_MESSAGE, None, "not_found"
 
+    # Context is built only from the winning page's own chunk(s) - not a
+    # mix of several different candidates' pages, like the un-reranked
+    # version joined - so the single cited source below is genuinely what
+    # grounds the whole answer, never a page whose content never made it
+    # into context.
+    same_page_documents = [
+        document
+        for document, metadata in zip(results["documents"][0], results["metadatas"][0])
+        if metadata.get("url") == top["url"]
+    ]
+
     context = "\n\n".join(
-        results["documents"][0]
+        _strip_known_boilerplate_text(document) for document in same_page_documents
     )
 
-    source = results[
-        "metadatas"
-    ][0][0]["url"]
+    source = top["url"]
 
     return context, source, "vector"
