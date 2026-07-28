@@ -25,6 +25,33 @@ UNDERGRADUATE_PROGRAM_PREFIXES = [
 ]
 
 
+
+# Page-template headings that reliably mark the start of the
+# department page's in-page navigation/next-section content -
+# confirmed against real scraped output across multiple graduate
+# department pages (Communication Studies, Cultural Analysis and Social
+# Theory, English and Film Studies, Philosophy), where each one appears
+# immediately after the coordinator name(s). Used as the preferred stop
+# boundary below, instead of grabbing a fixed-size window regardless of
+# where the coordinator text actually ends.
+_COORDINATOR_STOP_MARKERS = (
+    "Department Information on this page",
+    "Note on Courses Contained in Graduate Calendar",
+    "Notes on Courses Contained in Graduate Calendar",
+)
+
+# Upper bound used only when no stop marker is found at all (confirmed
+# live: the History department's page has no navigation heading here -
+# the coordinator line runs straight into department-description prose
+# with no clean boundary). Deliberately much smaller than the previous
+# fixed 500-character window - large enough to comfortably fit one or
+# two coordinators' name-and-credentials text (confirmed against real
+# multi-coordinator data, e.g. the Physics and Computer Science
+# department's two graduate co-ordinators), small enough that it no
+# longer pulls in unrelated page navigation or paragraphs of prose.
+_COORDINATOR_FALLBACK_WINDOW = 150
+
+
 def extract_coordinator(page_text, level):
 
     if level == "graduate":
@@ -33,9 +60,27 @@ def extract_coordinator(page_text, level):
             "Graduate Program Co-ordinator",
             "Graduate Program Co-ordinators",
         ):
-            if marker in page_text:
-                idx = page_text.find(marker)
-                return page_text[idx:idx + 500]
+
+            if marker not in page_text:
+                continue
+
+            idx = page_text.find(marker)
+
+            window = page_text[idx:idx + 500]
+
+            end = len(window)
+
+            for stop_marker in _COORDINATOR_STOP_MARKERS:
+
+                stop_idx = window.find(stop_marker)
+
+                if stop_idx != -1:
+                    end = min(end, stop_idx)
+
+            if end == len(window):
+                end = min(end, _COORDINATOR_FALLBACK_WINDOW)
+
+            return window[:end].strip()
 
         return ""
 
