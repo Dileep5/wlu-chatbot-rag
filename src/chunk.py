@@ -1,8 +1,9 @@
 import pandas as pd
 from pathlib import Path
 
-INPUT_FILE = Path("/Users/deepu/Documents/Graduate Project/WLU ChatBot/outputs/clean_pages.csv")
-OUTPUT_FILE = Path("/Users/deepu/Documents/Graduate Project/WLU ChatBot/outputs/chunks.csv")
+BASE_DIR = Path(__file__).resolve().parent.parent
+INPUT_FILE = BASE_DIR / "outputs" / "clean_pages.csv"
+OUTPUT_FILE = BASE_DIR / "outputs" / "chunks.csv"
 
 CHUNK_SIZE = 300  # words per chunk
 

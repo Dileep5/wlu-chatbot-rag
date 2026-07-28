@@ -4,8 +4,9 @@ from pathlib import Path
 import chromadb
 from sentence_transformers import SentenceTransformer
 
-DB_PATH = Path("/Users/deepu/Documents/Graduate Project/WLU ChatBot/data/faculty.db")
-VECTOR_DB_DIR = Path("/Users/deepu/Documents/Graduate Project/WLU ChatBot/data/vector_db")
+BASE_DIR = Path(__file__).resolve().parent.parent
+DB_PATH = BASE_DIR / "data" / "faculty.db"
+VECTOR_DB_DIR = BASE_DIR / "data" / "vector_db"
 
 # Same local embedding model already used for the general-page collection.
 MODEL_NAME = "all-MiniLM-L6-v2"

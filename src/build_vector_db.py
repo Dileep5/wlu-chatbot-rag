@@ -3,8 +3,9 @@ from pathlib import Path
 import chromadb
 from sentence_transformers import SentenceTransformer
 
-INPUT_FILE = Path("/Users/deepu/Documents/Graduate Project/WLU ChatBot/outputs/chunks.csv")
-DB_DIR = Path("/Users/deepu/Documents/Graduate Project/WLU ChatBot/data/vector_db")
+BASE_DIR = Path(__file__).resolve().parent.parent
+INPUT_FILE = BASE_DIR / "outputs" / "chunks.csv"
+DB_DIR = BASE_DIR / "data" / "vector_db"
 
 # A small local embedding model
 MODEL_NAME = "all-MiniLM-L6-v2"

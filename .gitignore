@@ -11,6 +11,11 @@ __pycache__/
 # ChromaDB generated files
 data/vector_db/
 
+# Refresh pipeline logs (timestamped, regenerated every run - see
+# .github/workflows/weekly-refresh.yml, which uploads them as a workflow
+# artifact instead of committing them)
+logs/
+
 # Python virtual environments
 venv/
 .env

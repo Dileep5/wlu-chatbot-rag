@@ -6,8 +6,9 @@ from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 
-URLS_FILE = Path("/Users/deepu/Documents/Graduate Project/WLU ChatBot/urls.txt")
-OUTPUT_FILE = Path("/Users/deepu/Documents/Graduate Project/WLU ChatBot/outputs/raw_pages.csv")
+BASE_DIR = Path(__file__).resolve().parent.parent
+URLS_FILE = BASE_DIR / "urls.txt"
+OUTPUT_FILE = BASE_DIR / "outputs" / "raw_pages.csv"
 
 HEADERS = {
     "User-Agent": (

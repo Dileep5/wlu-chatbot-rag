@@ -182,6 +182,29 @@ docker compose up --build
 
 ---
 
+## Data Refresh Pipeline
+
+`src/refresh_pipeline.py` orchestrates the full ingestion pipeline end-to-end by running the existing scripts in dependency order — it introduces no new scraping or loading logic of its own:
+
+1. `crawler.py` → `scrape.py` → `clean.py` → `chunk.py` (crawl WLU pages, scrape content, clean, chunk)
+2. Rebuild all structured databases — schema reset, then undergraduate calendar sync, graduate calendar sync, and the faculty directory sync
+3. Rebuild the ChromaDB vector databases (content chunks + faculty research interests)
+
+Every step's start/finish time, duration, success/failure, and a page/row count (where derivable) are written to a timestamped log at `logs/refresh_<UTC timestamp>.log`. The pipeline stops at the first failing step, since each later step depends on an earlier one's output.
+
+**Run manually:**
+
+```bash
+pip install -r requirements-ingestion.txt
+python3 src/refresh_pipeline.py
+```
+
+**Run automatically:** [`.github/workflows/weekly-refresh.yml`](.github/workflows/weekly-refresh.yml) runs this same script every Sunday at 06:00 UTC via a scheduled GitHub Actions job, and can also be triggered on demand from the Actions tab (`workflow_dispatch`). On success, it commits the refreshed `data/*.db`, `outputs/*.csv`, and `urls.txt` back to `main` and uploads the run's log as a workflow artifact.
+
+This pipeline only touches ingestion — retrieval, ranking, prompting, the response-card renderer, and the evaluation suite are all out of scope for it and are never modified by a refresh run.
+
+---
+
 ## Example Queries
 
 **Courses**
@@ -286,7 +309,6 @@ Beyond the automated suite:
 - Expand the crawl to include dedicated Tuition, Scholarships, Student Services, and Academic Deadlines pages, closing the corpus gaps noted above.
 - Add gendered-pronoun support ("she"/"he"/"her"/"him") to follow-up resolution.
 - Extend program comparison to accept informal or abbreviated program names, not just full official titles.
-- Automate the ingestion pipeline (currently a manual sequence of scripts) into a single scheduled or one-command refresh job.
 - Add a CI pipeline (e.g. GitHub Actions) that runs `evaluate.py` automatically on every push or pull request.
 - Add authentication and rate-limiting before any deployment beyond a local or classroom demo.
 - Migrate response cards from HTML-in-Markdown to native Streamlit widgets (`st.container`, `st.columns`) for even tighter framework integration.
