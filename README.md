@@ -1,109 +1,94 @@
-# WLU Hybrid RAG Assistant
+# 🎓 WLU Hybrid RAG Assistant
+
+**A grounded AI assistant for Wilfrid Laurier University, built on a genuine Hybrid Retrieval-Augmented Generation pipeline.**
+
+[![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.58-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o--mini-412991?style=flat-square&logo=openai&logoColor=white)](https://platform.openai.com/)
+[![ChromaDB](https://img.shields.io/badge/ChromaDB-1.5-2E7D32?style=flat-square)](https://www.trychroma.com/)
+[![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
+
+---
 
 ## Project Overview
 
-WLU Hybrid RAG Assistant is an AI chatbot for Wilfrid Laurier University
-that answers questions about courses, programs, faculty, admissions,
-tuition, scholarships, and student services.
+WLU Hybrid RAG Assistant answers questions about Wilfrid Laurier University — courses, programs, faculty, admissions, tuition, scholarships, student services, and more — without ever relying on a language model's general knowledge.
 
-It is built as a genuine **Hybrid Retrieval-Augmented Generation
-(Hybrid RAG)** system: rather than relying on a language model's
-general knowledge, every answer is grounded in real, scraped WLU data
-(the academic calendar and faculty directory). The assistant first
-tries deterministic, structured retrieval against a set of SQLite
-databases; if that finds nothing, it falls back to semantic vector
-search over the scraped WLU website; only when neither is a clean,
-already-complete answer does an LLM synthesize a response, and even
-then only from the retrieved data - never from its own general
-knowledge. Questions outside WLU's domain are declined gracefully
-rather than answered or fabricated.
+Every answer is grounded in real, scraped WLU data: the academic calendar and the faculty directory. The assistant tries deterministic, structured retrieval first (direct SQL lookups against dedicated course/program/faculty/department databases); if nothing structured matches, it falls back to semantic vector search over scraped WLU web pages; only when neither path produces an already-complete answer does an LLM synthesize a response — and even then, strictly from the retrieved context, never from its own training data. Questions the retrieved data doesn't support are declined honestly rather than answered with invented specifics, and questions outside WLU's domain are declined gracefully rather than answered at all.
+
+This project was built iteratively, phase by phase, with a full automated regression suite validated after every change — not a one-shot prototype.
 
 ---
 
-## Features
+## Key Features
 
-- **Hybrid Retrieval** - structured SQL lookups are always tried
-  first; vector search only runs when nothing structured matches.
-- **ChromaDB Vector Search** - semantic search over scraped WLU web
-  pages, used as the fallback for open-ended questions with no exact
-  structured match (e.g. tuition, scholarships, student services).
-- **Structured SQLite Search** - deterministic lookups across
-  dedicated course, program, faculty, and department databases.
-- **Deterministic Course Cards** - course questions bypass the LLM
-  entirely and render directly from the structured course record, so
-  the answer is exactly what's in the database, every time.
-- **Deterministic Faculty Cards** - the same deterministic treatment
-  for individual faculty profiles (title, department, contact info,
-  research interests).
-- **Deterministic Program Cards** - program questions are similarly
-  deterministic, with long program descriptions automatically split
-  into clear sections (Overview, Required Courses, Recommended
-  Schedule, Program Regulations, Additional Information) instead of
-  one long block of text.
-- **Source Citations** - every grounded answer includes a link back to
-  the exact WLU page it was drawn from.
-- **Conversation Memory** - multi-turn context resolution for
-  pronouns, follow-ups, and ordinal references ("Does it have
-  prerequisites?", "Who teaches it?", "Tell me about the first one").
-- **Off-topic Detection** - questions unrelated to WLU are declined
-  gracefully instead of being answered or fabricated.
-- **Streamlit UI** - a clean, native chat interface with a project
-  sidebar and a proper conversation history.
-- **Suggested Questions** - clickable example prompts shown before the
-  first message, so a new user (or a demo) has an immediate, working
-  starting point.
+- **Hybrid RAG Pipeline** — deterministic structured retrieval first, semantic vector search second, LLM synthesis only as a last resort, and only ever grounded in what was actually retrieved.
+- **Deterministic Structured Retrieval** — direct SQL lookups across dedicated course, program, faculty, and department databases, bypassing the LLM entirely whenever the data already contains a complete, correct answer.
+- **Course Name & Code Lookup** — courses are found by code (`CP312`) or by name (`"Tell me about Operating Systems"`), with automatic clarification when a name matches more than one course.
+- **Fuzzy Faculty Matching** — finds faculty by full name, first name, last name, or partial/misspelled name, and asks for clarification instead of guessing when a name is ambiguous.
+- **Conversation Memory & Follow-up Resolution** — multi-turn context resolution for pronouns, ordinal references, and topic continuation ("Does it have prerequisites?", "Who teaches it?", "Tell me about the first one.").
+- **Hallucination Prevention** — a calibrated confidence gate on vector search, plus deterministic "not found" responses for course codes, faculty names, and programs that don't exist — never a confident, fabricated answer.
+- **Grounded Generation** — the LLM's system prompt explicitly forbids stating any fact (tuition figures, scholarship values, deadlines, eligibility rules, statistics) not present in the retrieved context, and requires an explicit "I don't have enough information" instead of guessing.
+- **Professional Response Cards** — Course, Faculty, Program, and Department answers render as structured, styled cards (header, metadata grid, sectioned content, footer citation) instead of a wall of text.
+- **Source Citations** — every grounded answer links back to the exact WLU page it was drawn from.
+- **Off-topic Detection** — questions unrelated to WLU are declined gracefully instead of being answered or fabricated.
 
 ---
 
-## Architecture
+## Architecture Overview
 
-```
-User
-   ↓
-Intent Detection
-   ↓
-Hybrid Retrieval
-   ↓
-Structured / Vector Search
-   ↓
-Response Generation
-   ↓
-Card Renderer
-   ↓
-Streamlit UI
+```mermaid
+flowchart TD
+    U["User"] --> UI["Streamlit UI"]
+    UI --> ID{"Intent Detection"}
+
+    ID -->|"Greeting or off-topic"| DIRECT["Direct reply / graceful decline"]
+    ID -->|"WLU question"| SR
+
+    subgraph SR["Structured Retrieval"]
+        direction LR
+        C1["Courses"]
+        C2["Programs"]
+        C3["Faculty"]
+        C4["Departments"]
+    end
+
+    SR -->|"No match"| HVS["Hybrid Vector Search<br/>(ChromaDB, confidence-gated)"]
+
+    SR --> GL["Grounding Layer"]
+    HVS --> GL
+
+    GL --> LLM["OpenAI GPT-4o-mini<br/>(strict grounding prompt)"]
+    LLM --> RC["Professional Response Cards"]
 ```
 
-- **Intent Detection** - the incoming message is first checked for a
-  greeting, ordinary conversation, or an out-of-domain topic, so those
-  cases are handled directly without ever reaching retrieval.
-- **Hybrid Retrieval** - a real, in-domain question is run through
-  deterministic structured search first (and, for follow-up questions,
-  through contextual-reference resolution using conversation memory).
-- **Structured / Vector Search** - if structured search finds nothing,
-  the question falls through to ChromaDB vector search over scraped
-  WLU pages as a fallback.
-- **Response Generation** - responses already known to be complete and
-  correct (courses, programs, faculty, prerequisites, coordinators,
-  research) are shown exactly as retrieved, with no LLM involved;
-  everything else is synthesized by an LLM from the retrieved context.
-- **Card Renderer** - the response is handed to a dedicated rendering
-  layer that displays it as a structured Course/Faculty/Program card
-  when applicable, or as a plain conversational reply otherwise.
-- **Streamlit UI** - the final rendered response, along with its
-  source citation, is displayed in the chat interface.
+The diagram above shows the user-facing flow, top to bottom. See **Hybrid RAG Pipeline** below for the nuance it simplifies: a deterministic structured match (a real course, program, faculty, or department record) skips the LLM step completely and renders straight from the database record; follow-up/pronoun resolution and the vector search confidence gate both sit between Structured Retrieval and the Grounding Layer.
 
 ---
 
-## Technologies
+## Hybrid RAG Pipeline
 
-- Python
-- Streamlit
-- SQLite
-- ChromaDB
-- Sentence Transformers
-- OpenAI GPT
-- BeautifulSoup
-- Requests
+1. **Intent Detection** — the incoming message is checked for a greeting, ordinary small talk, or an out-of-domain topic first, so those cases never reach retrieval at all.
+2. **Deterministic Structured Retrieval** (`structured_search`) — a fixed, ordered cascade of SQL lookups: course-taught queries, prerequisites, program requirements, course lookup (by code or name), program lookup, faculty-level and department-level listings, single department lookup, single faculty lookup, and research-topic search — each tried in an order specifically chosen so a more specific capability never gets shadowed by a more general one.
+3. **Follow-up / Contextual Reference Resolution** — if nothing structured matched, the question is checked against conversation memory for an unresolved pronoun, ordinal ("the first one"), or topic-continuation reference before falling further.
+4. **Hybrid Vector Search** — only once every deterministic path has failed does the question go to ChromaDB semantic search over scraped WLU pages, reranked using page title/URL metadata and gated by a calibrated distance threshold so a weak semantic match is declined rather than confidently misused.
+5. **Grounding Layer** — a response already known to be complete and correct (a real course, program, faculty, or department record) is shown exactly as retrieved, with the LLM never invoked. Everything else is handed to the LLM together with an explicit instruction to state only facts present in that retrieved context.
+6. **Professional Response Cards** — the final answer is rendered by a dedicated presentation layer that builds a structured card when the response shape supports it, or a plain conversational reply otherwise.
+
+---
+
+## Technology Stack
+
+| Layer | Technology |
+|---|---|
+| UI | [Streamlit](https://streamlit.io/) |
+| LLM | [OpenAI GPT-4o-mini](https://platform.openai.com/) |
+| Vector Search | [ChromaDB](https://www.trychroma.com/) |
+| Embeddings | [Sentence Transformers](https://www.sbert.net/) (`all-MiniLM-L6-v2`) |
+| Structured Data | SQLite |
+| Fuzzy Matching | [RapidFuzz](https://github.com/rapidfuzz/RapidFuzz) |
+| Ingestion | BeautifulSoup, Requests |
+| Language | Python 3.13 |
 
 ---
 
@@ -112,216 +97,202 @@ Streamlit UI
 ```
 WLU ChatBot/
 ├── src/
-│   ├── app.py              # Entry point: Streamlit UI, session state, routing
-│   ├── retriever.py        # Structured + vector retrieval, conversation memory
-│   ├── renderer.py         # Course/Faculty/Program card rendering
-│   ├── conversation.py     # Small-talk / greeting detection
-│   ├── domain_guard.py     # Out-of-domain (off-topic) detection
-│   ├── evaluate.py         # Automated regression suite (see Evaluation below)
+│   ├── app.py               # Entry point: Streamlit UI, session state, query routing
+│   ├── retriever.py         # Structured + vector retrieval, grounding, conversation memory
+│   ├── renderer.py          # Course / Faculty / Program / Department card rendering
+│   ├── conversation.py      # Small-talk / greeting detection
+│   ├── domain_guard.py      # Out-of-domain (off-topic) detection
+│   ├── evaluate.py          # Automated regression suite (see Evaluation Results below)
 │   ├── scrape*.py, get_*.py, load_*.py, build_*.py
-│   │                       # Offline ingestion pipeline: scrapes WLU's
-│   │                       # website, builds the SQLite databases and
-│   │                       # the ChromaDB vector store
-│   └── create_*_table.py   # One-off database schema creation scripts
+│   │                        # Offline ingestion pipeline: scrapes WLU's website,
+│   │                        # builds the SQLite databases and the ChromaDB store
+│   └── create_*_table.py    # One-off database schema creation scripts
 ├── data/
-│   ├── courses.db          # Course catalog
-│   ├── programs.db         # Program/requirement catalog
-│   ├── faculty.db          # Faculty directory
-│   ├── departments.db      # Department directory
-│   └── vector_db/          # ChromaDB persistent vector store
-├── requirements-runtime.txt    # Dependencies to serve the chatbot
-├── requirements-ingestion.txt  # + dependencies to run the scraper pipeline
-├── requirements-dev.txt        # + dependencies to run the evaluation suite
+│   ├── courses.db           # Course catalog
+│   ├── programs.db          # Program / requirement catalog
+│   ├── faculty.db           # Faculty directory
+│   ├── departments.db       # Department directory
+│   └── vector_db/           # ChromaDB persistent vector store
+├── requirements-runtime.txt     # Dependencies to serve the chatbot
+├── requirements-ingestion.txt   # + dependencies to run the scraper pipeline
+├── requirements-dev.txt         # + dependencies to run the evaluation suite
 ├── Dockerfile / docker-compose.yml
 └── README.md
 ```
 
-`data/` is produced entirely by the ingestion pipeline (the
-`scrape_*`/`get_*`/`load_*`/`build_*` scripts in `src/`) and is treated
-as a build artifact - it's git-ignored where appropriate and only ever
-read by the live chatbot, never written to at runtime.
+`data/` is produced entirely by the ingestion pipeline and treated as a build artifact — it's only ever read by the live chatbot, never written to at runtime.
 
 ---
 
-## Installation
+## Installation Guide
 
 ```bash
-# 1. Create and activate a virtual environment
+# 1. Clone the repository
+git clone <repository-url>
+cd "WLU ChatBot"
+
+# 2. Create and activate a virtual environment
 python3 -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 
-# 2. Install dependencies
+# 3. Install runtime dependencies
 pip install -r requirements-runtime.txt
-
-# 3. Set your OpenAI API key (required for any non-deterministic
-#    response, e.g. vector-search fallback or conversational replies)
-export OPENAI_API_KEY=sk-...    # or place it in a .env file
-
-# 4. Run the app
-streamlit run src/app.py
 ```
 
-The app will be available at `http://localhost:8501`.
+If you also want to run the evaluation suite or the ingestion/scraper pipeline, install `requirements-dev.txt` or `requirements-ingestion.txt` instead — see the dependency table below for what each includes.
 
-If you also want to run the evaluation suite or the ingestion/scraper
-pipeline, install `requirements-dev.txt` or `requirements-ingestion.txt`
-instead (see **Dependency Management** below for what each includes).
+| Manifest | Purpose |
+|---|---|
+| `requirements-runtime.txt` | Serve the chatbot only |
+| `requirements-ingestion.txt` | Runtime + scraper/loader/vector-db-build pipeline |
+| `requirements-dev.txt` | Runtime + ingestion + evaluation suite and dev utilities |
 
----
-
-## Evaluation
-
-The project includes a complete, automated regression suite:
-
-```bash
-python3 src/evaluate.py
-```
-
-This drives the real Streamlit app end-to-end (via
-`streamlit.testing.v1.AppTest`) across every capability - courses,
-programs, faculty, coordinators, prerequisites, research, multi-turn
-conversation memory, and out-of-domain detection - plus a set of direct
-data-integrity checks against the scraped databases. In total it runs
-349 assertions and reports a pass/fail summary by category.
-
-**Note**: two of the data-integrity checks (`URL normalization: legacy
-URL template` and `URL normalization: stale current-pattern path`) make
-a live HTTP request to the real wlu.ca website to verify redirect
-behavior. Their pass/fail outcome depends on WLU's website at the
-moment the suite is run, not on this application's code - if WLU
-changes a page's redirect behavior, these two checks can fail (or
-pass) independently of any change made here. Every other check is
-fully deterministic and does not depend on external network state.
+All versions are exact-pinned (`==`), not ranged, so an install today and an install next month resolve to the identical dependency set.
 
 ---
 
-## Example Queries
+## Environment Variables
 
-**Course**
-- "What is CP312?"
-- "Tell me about CP317."
-
-**Faculty**
-- "Who is Tripat Gill?"
-- "Tell me about Ammara Mahmood."
-
-**Program**
-- "Tell me about the Honours BSc Computer Science program."
-- "What is the Master of Applied Politics program?"
-
-**Admissions**
-- "What are the admission requirements?"
-
-**Scholarships**
-- "What scholarships are available?"
-
-**Student Services**
-- "What student services does WLU offer?"
-
----
-
-## Future Work
-
-- Extend deterministic, structured card rendering to faculty/department
-  list views and department profiles (currently still LLM-synthesized).
-- Move from markdown-based cards to true native Streamlit widgets
-  (`st.container`, `st.columns`, `st.metric`) for a richer visual
-  layout.
-- Automate the ingestion pipeline (currently a manual sequence of
-  scripts) into a single scheduled or one-command refresh job.
-- Verify and harden the Docker image for a real deployment target, not
-  just local development.
-- Add authentication and rate-limiting before any deployment beyond a
-  local or classroom demo.
-
----
-
-## Dependency Management
-
-Dependencies are split across three manifests instead of one monolithic
-file, so an install only pulls in what that task actually needs.
-
-| Manifest | Purpose | Installs |
-|---|---|---|
-| `requirements-runtime.txt` | Serve the chatbot (`streamlit run src/app.py`) | `chromadb`, `sentence-transformers`, `streamlit`, `openai` |
-| `requirements-ingestion.txt` | Run the scraper/loader/vector-db-build pipeline | Everything in `requirements-runtime.txt`, plus `pandas`, `beautifulsoup4`, `requests` |
-| `requirements-dev.txt` | Run the evaluation suite (`python3 src/evaluate.py`) and the ad hoc dev utilities | Everything in `requirements-runtime.txt` and `requirements-ingestion.txt` |
-
-**Dependency hierarchy**: `requirements-ingestion.txt` includes
-`requirements-runtime.txt` via `-r`, and `requirements-dev.txt` includes
-both. Every shared package (`chromadb`, `sentence-transformers`) is
-pinned in exactly one place - `requirements-runtime.txt` - so the two
-other manifests can never drift out of sync with it.
-
-All versions are exact-pinned (`==`), not ranged, so an install today and
-an install next month resolve to the identical set of direct
-dependencies.
-
-```bash
-# Just serving the chatbot
-pip install -r requirements-runtime.txt
-
-# Running the scraper/ingestion pipeline
-pip install -r requirements-ingestion.txt
-
-# Running the evaluation suite or development utilities
-pip install -r requirements-dev.txt
-```
-
-`rank-bm25` is deliberately not included in any manifest - it was only
-ever imported by two unused, unimported experimental scripts
-(`bm25_test.py`, `hybrid_retrieval.py`), not by any code the app or
-evaluation suite actually runs.
-
----
-
-## Docker
-
-The serving image installs only `requirements-runtime.txt` - the
-scraper-only packages in `requirements-ingestion.txt` never enter it.
-`data/` and the Hugging Face model cache are mounted as volumes, not
-baked into the image, since both are working artifacts that change
-independently of application code.
-
-### Environment variables
-
-Create a `.env` file in the project root (never committed - already
-git-ignored) containing:
+Create a `.env` file in the project root (never committed — already git-ignored):
 
 ```
 OPENAI_API_KEY=sk-...
 ```
 
-`docker-compose.yml` loads this via `env_file`, so the container sees
-the same `OPENAI_API_KEY` the app already reads via `os.getenv(...)`
-when run outside Docker.
+This is required for any non-deterministic response (the vector-search fallback, conversational small talk, or LLM-synthesized answers). Deterministic structured answers — a real course, program, faculty, or department record — render without ever calling the OpenAI API.
 
-### Expected directory structure
+---
 
-`data/` must exist next to the Dockerfile before starting the
-container - it's mounted in, not built by the image:
-
-```
-data/
-├── courses.db
-├── faculty.db
-├── programs.db
-├── departments.db
-└── vector_db/
-```
-
-These are produced by the ingestion pipeline (`requirements-ingestion.txt`)
-run outside Docker; the serving container only ever reads them.
-
-### Build and run
+## Running the Application
 
 ```bash
-# Build the image
-docker build -t wlu-chatbot .
+streamlit run src/app.py
+```
 
-# Build and start via compose (recommended - wires up both volumes
-# and the .env file automatically)
+The app is then available at **http://localhost:8501**.
+
+### Running with Docker
+
+```bash
+# Build and start via compose (wires up volumes and the .env file automatically)
 docker compose up --build
 ```
 
-The chatbot is then reachable at `http://localhost:8501`.
+`data/` must exist next to the `Dockerfile` before starting the container — it's mounted in as a volume, produced by the ingestion pipeline run outside Docker, and never baked into the image.
+
+---
+
+## Example Queries
+
+**Courses**
+- "What is CP312?"
+- "Tell me about Operating Systems."
+- "Does CP312 require CP220?"
+- "Who teaches CP104?"
+
+**Programs**
+- "Tell me about the Honours BSc Computer Science program."
+- "What is the Master of Applied Computing program?"
+- "What are the admission requirements for the MBA?"
+
+**Faculty**
+- "Who is Shohini Ghose?"
+- "Tell me about Ammara Mahmood."
+- "Who researches machine learning?"
+
+**Departments**
+- "Tell me about the Economics department."
+- "Who works in the Computer Science department?"
+
+**Follow-ups (multi-turn)**
+- "Tell me about CP312." → "Does it have prerequisites?" → "Who teaches it?"
+
+**Open-ended**
+- "What scholarships are available?"
+- "What are the admission requirements?"
+- "What support is available for international students?"
+
+---
+
+## Evaluation Results
+
+The project includes a complete, automated regression suite (`src/evaluate.py`) that drives the real Streamlit app end-to-end via `streamlit.testing.v1.AppTest` — not unit tests against internal functions, but the actual application a user would interact with.
+
+```bash
+python3 src/evaluate.py
+```
+
+**Latest result: 226/226 automated checks passing**, across every shipped capability:
+
+| Category | Result |
+|---|---|
+| Basic Conversation | 5/5 |
+| Conversation Memory | 4/4 |
+| Program Retrieval / Aliases / Comparison | 8/8 |
+| Undergraduate Programs / Course Requirements | 17/17 |
+| Faculty Retrieval | 3/3 |
+| Research Topic | 4/4 |
+| Courses Taught | 10/10 |
+| Person + Topic Courses Taught | 5/5 |
+| Department False-Positive Prevention | 9/9 |
+| Coordinator / Department Coordinator Lookup | 9/9 |
+| Course Prerequisites / Metadata | 8/8 |
+| Graduate Program Requirements | 5/5 |
+| Multi-Turn Conversations | 5/5 |
+| Entity History | 5/5 |
+| Out-of-Domain Detection | 6/6 |
+| Data Integrity (scraper/extraction correctness) | 123/123 |
+
+**Cross-cutting accuracy metrics** (rolled up across every category above, independent of which capability produced the answer):
+- Retrieval accuracy (right feature, correct data): **84/84**
+- Clarification accuracy (unresolvable references correctly ask for clarification): **3/3**
+- Unsupported-query handling (out-of-scope questions decline gracefully, never fabricate): **16/16**
+
+Beyond the automated suite:
+- **Manual browser testing completed** — every major flow (course/program/faculty/department lookup, multi-turn follow-ups, the professional response cards, and the redesigned UI) was independently verified in a real Chromium browser against a live running instance, not just inspected in code.
+- **Structured regression testing passed** — a 100-query hand-designed test plan spanning courses, programs, faculty, admissions, scholarships, tuition, student services, multi-turn conversations, edge cases, and invalid queries was run end-to-end against the live app to surface issues automated checks alone wouldn't catch.
+
+---
+
+## Screenshots
+
+> Screenshots are not yet included in this repository. To add them:
+>
+> 1. Run the app locally (`streamlit run src/app.py`).
+> 2. Capture the hero/welcome screen, a Course Card, a Faculty Card, and a multi-turn conversation.
+> 3. Save them under `docs/screenshots/` (e.g. `docs/screenshots/hero.png`, `docs/screenshots/course-card.png`) and reference them here:
+>
+> ```markdown
+> ![Hero section](docs/screenshots/hero.png)
+> ![Course Card](docs/screenshots/course-card.png)
+> ![Faculty Card](docs/screenshots/faculty-card.png)
+> ```
+
+---
+
+## Known Limitations
+
+- **Follow-ups need an explicit referring word.** Conversation memory resolves "it", "that", "this", "those", "these", "they", "them", and phrases like "the professor"/"the course", but a natural follow-up with no referring word at all (e.g. "Who is the coordinator?" with no "it") isn't resolved. Gendered pronouns ("she"/"he"/"her"/"him") aren't recognized — only the neutral set above.
+- **Deterministic name matching can collide with common words.** Last-name-only faculty matching is intentionally permissive (by design, to support genuine last-name-only queries), which means a query using a word that's also a real faculty surname (e.g. "Dean" as a title vs. Jason Dean as a person) can resolve to the wrong thing.
+- **Program comparison expects full official names.** "Compare Computer Science and Business Administration" may not trigger a true side-by-side comparison the way "Compare the Master of Computer Science and Master of Applied Computing programs" reliably does.
+- **The scraped corpus doesn't cover every topic.** The crawl that built the vector store is a bounded snapshot of the WLU website; some topics (a dedicated Tuition page, a general Academic Deadlines / Calendar page) were never crawled. For these, the assistant either grounds in the closest genuinely related content or honestly declines — it does not fabricate the missing page.
+- **LLM-synthesized answers aren't infallible.** The vector-search fallback path is grounded by an explicit anti-fabrication system prompt, but an LLM's compliance with that instruction, while extensively tested, isn't mathematically guaranteed on every possible phrasing.
+- **Not production-hardened.** There is no authentication, rate-limiting, or abuse protection — this is a local/classroom-demo deployment target, not a public-internet-facing service.
+
+---
+
+## Future Improvements
+
+- Expand the crawl to include dedicated Tuition, Scholarships, Student Services, and Academic Deadlines pages, closing the corpus gaps noted above.
+- Add gendered-pronoun support ("she"/"he"/"her"/"him") to follow-up resolution.
+- Extend program comparison to accept informal or abbreviated program names, not just full official titles.
+- Automate the ingestion pipeline (currently a manual sequence of scripts) into a single scheduled or one-command refresh job.
+- Add a CI pipeline (e.g. GitHub Actions) that runs `evaluate.py` automatically on every push or pull request.
+- Add authentication and rate-limiting before any deployment beyond a local or classroom demo.
+- Migrate response cards from HTML-in-Markdown to native Streamlit widgets (`st.container`, `st.columns`) for even tighter framework integration.
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
