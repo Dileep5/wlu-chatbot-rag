@@ -1,3 +1,4 @@
+import html
 import re
 
 import streamlit as st
@@ -6,9 +7,9 @@ import streamlit as st
 # refactor only - these groups decide which of the four renderers below
 # handles a given response_type, but every renderer still shows exactly
 # the same answer/source text as before (Phase 13A). Anything not listed
-# here (department_profile, research, vector, and the None used by
-# greeting/conversation/off-topic/clarification paths) falls through to
-# render_generic(), which is byte-identical to today's plain rendering.
+# here (research, vector, and the None used by greeting/conversation/
+# off-topic/clarification paths) falls through to render_generic(),
+# which is byte-identical to today's plain rendering.
 _COURSE_RESPONSE_TYPES = {
     "course",
     "prerequisite",
@@ -30,11 +31,300 @@ _PROGRAM_RESPONSE_TYPES = {
     "coordinator",
 }
 
+# Phase 18: "department_profile" previously had no dedicated card at all
+# and fell through to render_generic() - a real presentation gap, not a
+# deliberate omission (structured_search()'s DEPARTMENT branch, unlike
+# every other structured branch, never had a renderer of its own).
+_DEPARTMENT_RESPONSE_TYPES = {
+    "department_profile",
+}
+
+
+# -----------------------------
+# Phase 18: shared HTML card styling and building blocks.
+#
+# Everything in this section is presentation-only: it consumes the
+# fields each _parse_*_fields() function already extracts (all
+# unchanged below) and lays them out as an HTML card instead of a flat
+# "**Label**\nvalue" markdown list. No parsing, extraction, or
+# label/field selection logic is touched by anything in this section.
+#
+# Colors reference the CSS custom properties app.py's Phase 17 redesign
+# already defines on :root (--wlu-purple, --wlu-gold, etc.) so cards
+# stay visually consistent with the rest of the app without duplicating
+# the palette here - the var(..., fallback) form keeps this file
+# self-contained (falls back to the same values) if it's ever rendered
+# before that CSS block runs.
+# -----------------------------
+
+_CARD_CSS = """
+<style>
+.wlu-card {
+    background: var(--wlu-card-bg, #FFFFFF);
+    border: 1px solid var(--wlu-border, #E4DFF0);
+    border-radius: 14px;
+    overflow: hidden;
+    margin: 0.25rem 0 0.5rem;
+}
+.wlu-card-header {
+    background: linear-gradient(135deg, var(--wlu-purple, #4B2E83) 0%, var(--wlu-purple-dark, #34215C) 100%);
+    padding: 1rem 1.25rem;
+}
+.wlu-card-header .wlu-eyebrow {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--wlu-gold, #C9A227);
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+}
+.wlu-card-header .wlu-card-title {
+    font-family: 'Poppins', 'Inter', sans-serif;
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #FFFFFF;
+    line-height: 1.3;
+    margin: 0;
+}
+.wlu-card-header .wlu-card-subtitle {
+    font-size: 0.88rem;
+    color: rgba(255, 255, 255, 0.82);
+    margin-top: 0.2rem;
+}
+.wlu-card-body {
+    padding: 1.1rem 1.25rem 0.2rem;
+}
+.wlu-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.65rem 1.5rem;
+}
+.wlu-meta-item .wlu-meta-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--wlu-ink-muted, #675F7D);
+    font-weight: 600;
+    margin-bottom: 0.15rem;
+}
+.wlu-meta-item .wlu-meta-value {
+    font-size: 0.92rem;
+    color: var(--wlu-ink, #201C2E);
+    font-weight: 500;
+    line-height: 1.45;
+}
+.wlu-section {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    padding-bottom: 0.9rem;
+    border-top: 1px solid var(--wlu-border, #E4DFF0);
+}
+.wlu-card-body > .wlu-section:first-child {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+}
+.wlu-section-title {
+    font-size: 0.76rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--wlu-purple, #4B2E83);
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+}
+.wlu-section p {
+    margin: 0 0 0.6rem;
+    line-height: 1.6;
+    color: var(--wlu-ink, #201C2E);
+    font-size: 0.92rem;
+}
+.wlu-section p:last-child {
+    margin-bottom: 0;
+}
+.wlu-section.wlu-highlight {
+    background: var(--wlu-purple-soft, #F2EEFA);
+    border: 1px solid var(--wlu-border, #E4DFF0);
+    border-left: 3px solid var(--wlu-gold, #C9A227);
+    border-radius: 10px;
+    padding: 0.85rem 1rem;
+}
+.wlu-schedule-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.75rem;
+}
+.wlu-schedule-item {
+    background: var(--wlu-purple-soft, #F2EEFA);
+    border-radius: 10px;
+    padding: 0.7rem 0.85rem;
+}
+.wlu-schedule-item .wlu-meta-label {
+    color: var(--wlu-purple, #4B2E83);
+}
+.wlu-schedule-item .wlu-meta-value {
+    font-weight: 400;
+}
+.wlu-card-footer {
+    background: var(--wlu-purple-soft, #F2EEFA);
+    border-top: 1px solid var(--wlu-border, #E4DFF0);
+    padding: 0.55rem 1.25rem;
+    font-size: 0.78rem;
+}
+.wlu-card-footer .wlu-source-label,
+.wlu-standalone-source .wlu-source-label {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: var(--wlu-ink-muted, #675F7D);
+    margin-right: 0.3rem;
+}
+.wlu-card-footer a,
+.wlu-standalone-source a {
+    color: var(--wlu-purple, #4B2E83);
+    font-weight: 600;
+    text-decoration: none;
+    word-break: break-all;
+}
+.wlu-card-footer a:hover,
+.wlu-standalone-source a:hover {
+    text-decoration: underline;
+}
+.wlu-standalone-source {
+    font-size: 0.8rem;
+    padding: 0.4rem 0;
+}
+</style>
+"""
+
+
+def _esc(value):
+    """HTML-escapes a value for safe interpolation into the card markup
+    below - the value itself is exactly what the unchanged _parse_*_
+    fields()/_extract_labeled_field() functions already produced from
+    the raw context text; this only prevents literal "&"/"<"/">"/quote
+    characters occasionally present in scraped text from being
+    misread as markup."""
+
+    return html.escape(str(value)) if value else ""
+
+
+def _text_html(value):
+    """Escapes a value, then reflows it into <p> blocks split on blank
+    lines (real paragraph breaks) - presentation only, the text itself
+    is unchanged. A single newline within a paragraph is deliberately
+    left as-is rather than forced into a <br>: HTML already collapses a
+    lone newline to whitespace the same way Markdown's own soft-break
+    rule would have, which matters here because the scraped academic-
+    calendar text is full of single mid-sentence line breaks (e.g.
+    "MA102\\nprior to completing\\nMA103") that would otherwise render
+    as a needlessly choppy, broken-up paragraph instead of flowing
+    text."""
+
+    if not value:
+        return ""
+
+    escaped = _esc(value)
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", escaped) if p.strip()]
+
+    if not paragraphs:
+        return ""
+
+    return "".join(f"<p>{para}</p>" for para in paragraphs)
+
+
+def _meta_grid_html(items):
+    """items: an iterable of (label, value) pairs. Entries with a falsy
+    value are skipped entirely (the same "hide missing fields"
+    convention _parse_*_fields() callers already relied on). Renders as
+    a responsive multi-column grid via CSS auto-fit, not fixed markup -
+    the actual column count adapts to available width."""
+
+    cells = "".join(
+        f'<div class="wlu-meta-item">'
+        f'<div class="wlu-meta-label">{_esc(label)}</div>'
+        f'<div class="wlu-meta-value">{_esc(value)}</div>'
+        f"</div>"
+        for label, value in items
+        if value
+    )
+
+    return f'<div class="wlu-meta-grid">{cells}</div>' if cells else ""
+
+
+def _section_html(title, body_html, icon="", highlight=False):
+    """Wraps already-built body HTML (from _text_html()/_meta_grid_html()/
+    a custom block like the program schedule grid) in a titled, visually
+    separated section. Returns "" - and is safe to include unfiltered in
+    a sections list - whenever body_html is empty, so a missing field
+    simply produces no section rather than an empty heading."""
+
+    if not body_html:
+        return ""
+
+    css_class = "wlu-section wlu-highlight" if highlight else "wlu-section"
+    heading = f"{icon} {_esc(title)}".strip() if icon else _esc(title)
+
+    return (
+        f'<div class="{css_class}">'
+        f'<div class="wlu-section-title">{heading}</div>'
+        f"{body_html}"
+        f"</div>"
+    )
+
+
+def _card_footer_html(source):
+
+    if not source:
+        return ""
+
+    escaped_source = _esc(source)
+
+    return (
+        f'<div class="wlu-card-footer">'
+        f'<span class="wlu-source-label">Source</span>'
+        f'<a href="{escaped_source}" target="_blank" rel="noopener">{escaped_source}</a>'
+        f"</div>"
+    )
+
+
+def _card_html(eyebrow, title, subtitle, body_sections, source):
+    """Assembles one complete card (header + body sections + footer) as
+    a single HTML string, so every card is still exactly one
+    st.markdown() call - unchanged from before Phase 18, and required
+    for the evaluate.py AppTest harness, which reads only the first
+    markdown element of the last chat message."""
+
+    subtitle_html = (
+        f'<div class="wlu-card-subtitle">{_esc(subtitle)}</div>' if subtitle else ""
+    )
+
+    return (
+        f"{_CARD_CSS}"
+        f'<div class="wlu-card">'
+        f'<div class="wlu-card-header">'
+        f'<div class="wlu-eyebrow">{_esc(eyebrow)}</div>'
+        f'<div class="wlu-card-title">{_esc(title)}</div>'
+        f"{subtitle_html}"
+        f"</div>"
+        f'<div class="wlu-card-body">{"".join(body_sections)}</div>'
+        f"{_card_footer_html(source)}"
+        f"</div>"
+    )
+
 
 def _render_source(source):
 
     if source:
-        st.markdown(f"**Source:** {source}")
+        escaped_source = _esc(source)
+        st.markdown(
+            f"{_CARD_CSS}"
+            f'<div class="wlu-standalone-source">'
+            f'<span class="wlu-source-label">Source</span>'
+            f'<a href="{escaped_source}" target="_blank" rel="noopener">{escaped_source}</a>'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
 
 # Phase 13C: known labels the underlying context text can contain
@@ -131,10 +421,6 @@ def _render_course_fallback(answer, source):
     _render_source(source)
 
 
-# A single st.markdown() call, not one per field - the evaluate.py
-# AppTest harness reads only the first markdown element of the last
-# chat message, so every bit of card text has to live in that one call
-# for the existing regression suite to keep seeing the full answer.
 def render_course(answer, source):
 
     fields = _parse_course_fields(answer)
@@ -143,19 +429,30 @@ def render_course(answer, source):
         _render_course_fallback(answer, source)
         return
 
-    lines = ["📘 Course", ""]
+    meta_items = [
+        ("Credits", fields.get("Credits")),
+        ("Prerequisites", fields.get("Prerequisites")),
+        ("Corequisites", fields.get("Corequisites")),
+        ("Exclusions", fields.get("Exclusions")),
+        ("Location", fields.get("Location")),
+        ("Notes", fields.get("Notes")),
+    ]
 
-    for label in _COURSE_CARD_FIELDS:
+    body_sections = [
+        _meta_grid_html(meta_items),
+        _section_html("Description", _text_html(fields.get("Description")), icon="📄"),
+    ]
 
-        value = fields.get(label)
-
-        if value:
-            lines.append(f"**{label}**")
-            lines.append(value)
-            lines.append("")
-
-    st.markdown("\n".join(lines).rstrip())
-    _render_source(source)
+    st.markdown(
+        _card_html(
+            eyebrow="📘 Course",
+            title=f"{fields['Course Code']} · {fields['Course Name']}",
+            subtitle=None,
+            body_sections=[s for s in body_sections if s],
+            source=source,
+        ),
+        unsafe_allow_html=True,
+    )
 
 
 # Phase 13E: known labels the raw faculty_profile context can contain
@@ -233,9 +530,6 @@ def _render_faculty_fallback(answer, source):
     _render_source(source)
 
 
-# A single st.markdown() call, not one per field - same reasoning as
-# render_course() (the evaluate.py AppTest harness reads only the first
-# markdown element of the last chat message).
 def render_faculty(answer, source):
 
     fields = _parse_faculty_fields(answer)
@@ -244,19 +538,41 @@ def render_faculty(answer, source):
         _render_faculty_fallback(answer, source)
         return
 
-    lines = ["👨‍🏫 Faculty", ""]
+    profile_items = [
+        ("Faculty", fields.get("Faculty")),
+        ("Department", fields.get("Department")),
+    ]
 
-    for label in _FACULTY_CARD_FIELDS:
+    contact_items = [
+        ("Email", fields.get("Email")),
+        ("Phone", fields.get("Phone")),
+        ("Office", fields.get("Office")),
+        ("Website", fields.get("Website")),
+        ("Office Hours", fields.get("Office Hours")),
+    ]
 
-        value = fields.get(label)
+    body_sections = [
+        _meta_grid_html(profile_items),
+        _section_html("Contact", _meta_grid_html(contact_items), icon="📇"),
+        _section_html(
+            "Research Interests",
+            _text_html(fields.get("Research Interests")),
+            icon="🔬",
+            highlight=True,
+        ),
+        _section_html("Biography", _text_html(fields.get("Biography")), icon="📝"),
+    ]
 
-        if value:
-            lines.append(f"**{label}**")
-            lines.append(value)
-            lines.append("")
-
-    st.markdown("\n".join(lines).rstrip())
-    _render_source(source)
+    st.markdown(
+        _card_html(
+            eyebrow="👨‍🏫 Faculty Profile",
+            title=fields["Name"],
+            subtitle=fields.get("Title"),
+            body_sections=[s for s in body_sections if s],
+            source=source,
+        ),
+        unsafe_allow_html=True,
+    )
 
 
 # Phase 13F: known labels the raw "program" context can contain
@@ -539,100 +855,145 @@ def render_program(answer, source):
         _render_program_fallback(answer, source)
         return
 
-    lines = ["🎓 Program", ""]
-
-    # 🎓 Program Information - Program Name/Level/Program Type are the
-    # only fields of Requirement 3's list this response_type's text ever
-    # has (Degree/Department have no corresponding label anywhere in it -
-    # a real data gap, not a parsing miss, confirmed in Phase 13F).
-    info_fields = [
-        ("Program Name", fields.get("Program Name")),
+    meta_items = [
         ("Level", fields.get("Level")),
         ("Program Type", fields.get("Program Type")),
     ]
 
-    if any(value for _, value in info_fields):
+    schedule_html = ""
 
-        lines.append("## 🎓 Program Information")
-        lines.append("")
-
-        for label, value in info_fields:
-
-            if value:
-                lines.append(f"**{label}**")
-                lines.append(value)
-                lines.append("")
-
-    # 📥 Admission Requirements - not in Requirement 3's named section
-    # list, but the raw text does carry it as its own label (graduate
-    # programs) - preserved as its own section rather than dropped, the
-    # same "don't lose extra labeled fields" precedent already applied
-    # to the Course and Faculty cards.
-    if fields.get("Admission Requirements"):
-
-        lines.append("## 📥 Admission Requirements")
-        lines.append("")
-        lines.append(fields["Admission Requirements"])
-        lines.append("")
-
-    # 📝 Overview
-    if sections["overview"]:
-
-        lines.append("## 📝 Overview")
-        lines.append("")
-        lines.append(sections["overview"])
-        lines.append("")
-
-    # 📚 Required Courses - graduate programs describe these in prose
-    # under the "Program Requirements" label (already parsed above);
-    # undergraduate programs organized by year instead list them inside
-    # each Year's own block below, so this section is left hidden for
-    # those rather than duplicating the same courses under two headings.
-    if fields.get("Program Requirements"):
-
-        lines.append("## 📚 Required Courses")
-        lines.append("")
-        lines.append(fields["Program Requirements"])
-        lines.append("")
-
-    # 📅 Recommended Schedule
     if sections["schedule"]:
 
-        lines.append("## 📅 Recommended Schedule")
-        lines.append("")
+        schedule_cards = "".join(
+            f'<div class="wlu-schedule-item">'
+            f'<div class="wlu-meta-label">{_esc(year_label)}</div>'
+            f'<div class="wlu-meta-value">{_text_html(year_text)}</div>'
+            f"</div>"
+            for year_label, year_text in sections["schedule"]
+        )
+        schedule_html = f'<div class="wlu-schedule-grid">{schedule_cards}</div>'
 
-        for year_label, year_text in sections["schedule"]:
-            lines.append(f"**{year_label}**")
-            lines.append(year_text)
-            lines.append("")
+    body_sections = [
+        _meta_grid_html(meta_items),
+        _section_html(
+            "Admission Requirements",
+            _text_html(fields.get("Admission Requirements")),
+            icon="📥",
+        ),
+        _section_html("Overview", _text_html(sections["overview"]), icon="📝"),
+        _section_html(
+            "Required Courses",
+            _text_html(fields.get("Program Requirements")),
+            icon="📚",
+        ),
+        _section_html("Recommended Schedule", schedule_html, icon="📅"),
+        _section_html(
+            "Program Regulations", _text_html(sections["regulations"]), icon="📋"
+        ),
+        _section_html(
+            "Additional Information", _text_html(sections["additional"]), icon="ℹ️"
+        ),
+    ]
 
-    # 📋 Program Regulations
-    if sections["regulations"]:
+    st.markdown(
+        _card_html(
+            eyebrow="🎓 Program",
+            title=fields["Program Name"],
+            subtitle=None,
+            body_sections=[s for s in body_sections if s],
+            source=source,
+        ),
+        unsafe_allow_html=True,
+    )
 
-        lines.append("## 📋 Program Regulations")
-        lines.append("")
-        lines.append(sections["regulations"])
-        lines.append("")
 
-    # ℹ️ Additional Information
-    if sections["additional"]:
+# Phase 18: known labels the raw "department_profile" context can
+# contain (structured_search()'s DEPARTMENT branch, retriever.py) - same
+# lookahead-boundary pattern as course/faculty/program parsing. The
+# sibling "coordinator" response_type (used for both program- and
+# department-coordinator answers) is intentionally left routed through
+# render_program() exactly as before - unchanged, since retargeting it
+# would mean deciding, from parsed text alone, which of the two a given
+# "coordinator" answer actually is, which is routing logic this phase
+# doesn't touch.
+_DEPARTMENT_FIELD_LABELS = [
+    "Department",
+    "Faculty",
+    "Level",
+    "Programs",
+    "Description",
+]
 
-        lines.append("## ℹ️ Additional Information")
-        lines.append("")
-        lines.append(sections["additional"])
-        lines.append("")
+_DEPARTMENT_FIELD_ALTERNATION = "|".join(
+    re.escape(label) for label in _DEPARTMENT_FIELD_LABELS
+)
 
-    # 🔗 Source - the actual link is still rendered by the shared
-    # _render_source() helper (unchanged, still used identically by the
-    # Course/Faculty/generic renderers) in its own call right after this
-    # one; this heading just labels it consistently with the sections
-    # above, inside the same combined block the AppTest harness reads.
-    if source:
-        lines.append("## 🔗 Source")
-        lines.append("")
+_DEPARTMENT_CARD_FIELDS = [
+    "Department",
+    "Faculty",
+    "Level",
+    "Programs",
+    "Description",
+]
 
-    st.markdown("\n".join(lines).rstrip())
+
+def _parse_department_fields(answer):
+    """Mirrors _parse_course_fields()/_parse_faculty_fields()/
+    _parse_program_fields() - best-effort parse of the existing
+    label:value department text. Returns None (parsing "failed") unless
+    Department is found - the one field that actually identifies a
+    department - since department_profile answer text can still be
+    LLM-paraphrased prose in older stored session history, with no
+    labels to find at all. render_department() falls back to the
+    original (pre-Phase-18, render_generic-equivalent) rendering
+    whenever this returns None."""
+
+    fields = {
+        label: _extract_labeled_field(label, answer, _DEPARTMENT_FIELD_ALTERNATION)
+        for label in _DEPARTMENT_CARD_FIELDS
+    }
+
+    if not fields["Department"]:
+        return None
+
+    return fields
+
+
+def _render_department_fallback(answer, source):
+
+    st.markdown(f"🏛️ Department\n\n{answer}")
     _render_source(source)
+
+
+def render_department(answer, source):
+
+    fields = _parse_department_fields(answer)
+
+    if not fields:
+        _render_department_fallback(answer, source)
+        return
+
+    meta_items = [
+        ("Faculty", fields.get("Faculty")),
+        ("Level", fields.get("Level")),
+    ]
+
+    body_sections = [
+        _meta_grid_html(meta_items),
+        _section_html("Programs", _text_html(fields.get("Programs")), icon="📚"),
+        _section_html("Overview", _text_html(fields.get("Description")), icon="📝"),
+    ]
+
+    st.markdown(
+        _card_html(
+            eyebrow="🏛️ Department",
+            title=fields["Department"],
+            subtitle=None,
+            body_sections=[s for s in body_sections if s],
+            source=source,
+        ),
+        unsafe_allow_html=True,
+    )
 
 
 def render_generic(answer, source):
@@ -651,6 +1012,9 @@ def render_response(response_type, answer, source):
 
     elif response_type in _PROGRAM_RESPONSE_TYPES:
         render_program(answer, source)
+
+    elif response_type in _DEPARTMENT_RESPONSE_TYPES:
+        render_department(answer, source)
 
     else:
         render_generic(answer, source)

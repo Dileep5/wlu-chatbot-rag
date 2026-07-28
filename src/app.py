@@ -104,6 +104,13 @@ def is_greeting(text: str) -> bool:
 # multi-candidate course-NAME disambiguation message (structured_search's
 # COURSE branch, retriever.py) is shown verbatim so an LLM paraphrase
 # can't drop or invent a candidate course code.
+#
+# Phase 18: "department_profile" added for the same reason as course/
+# faculty_profile/program (Phase 13D/13E/13F) - renderer.py's new
+# Department Card needs the raw "Department:"/"Faculty:"/... labeled
+# text to parse; an LLM paraphrase of it (the prior behavior) has none
+# of those labels, so the card would otherwise always fall back to
+# plain text instead of rendering.
 DETERMINISTIC_RESPONSE_TYPES = {
     "prerequisite",
     "undergraduate_requirements",
@@ -116,6 +123,7 @@ DETERMINISTIC_RESPONSE_TYPES = {
     "faculty_clarify",
     "not_found",
     "course_clarify",
+    "department_profile",
 }
 
 
