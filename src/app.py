@@ -315,6 +315,168 @@ Be friendly and conversational.
 
 
 # -----------------------------
+# Custom CSS (Phase 17: visual redesign only - no widget behavior,
+# routing, memory, prompting, or rendering logic below this point is
+# touched; every st.markdown(..., unsafe_allow_html=True) call here
+# either injects a page-wide <style> block or purely decorative HTML
+# that replaces an equivalent plain st.title()/st.caption()/st.info()
+# call one-for-one).
+# -----------------------------
+
+CUSTOM_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@600;700&family=Inter:wght@400;500;600&display=swap');
+
+:root {
+    --wlu-purple: #4B2E83;
+    --wlu-purple-dark: #34215C;
+    --wlu-purple-soft: #F2EEFA;
+    --wlu-gold: #C9A227;
+    --wlu-ink: #201C2E;
+    --wlu-ink-muted: #675F7D;
+    --wlu-border: #E4DFF0;
+    --wlu-online: #1F9D55;
+}
+
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, "Segoe UI", sans-serif;
+}
+
+.block-container {
+    padding-top: 2rem;
+    max-width: 880px;
+}
+
+h1, h2, h3, h4 {
+    font-family: 'Poppins', 'Inter', sans-serif;
+    letter-spacing: -0.01em;
+}
+
+/* Hero */
+.wlu-hero {
+    background: linear-gradient(135deg, var(--wlu-purple) 0%, var(--wlu-purple-dark) 100%);
+    border-radius: 18px;
+    padding: 2.25rem 2.25rem;
+    margin-bottom: 1.25rem;
+    box-shadow: 0 10px 28px rgba(75, 46, 131, 0.22);
+}
+.wlu-hero h1 {
+    font-size: 2.1rem;
+    font-weight: 700;
+    color: #FFFFFF;
+    margin: 0 0 0.4rem;
+}
+.wlu-hero .wlu-tagline {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--wlu-gold);
+    margin: 0 0 0.65rem;
+}
+.wlu-hero .wlu-desc {
+    font-size: 0.94rem;
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.86);
+    max-width: 62ch;
+    margin: 0;
+}
+
+/* Welcome card */
+.wlu-welcome {
+    background: var(--wlu-purple-soft);
+    border: 1px solid var(--wlu-border);
+    border-left: 4px solid var(--wlu-purple);
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.25rem;
+}
+.wlu-welcome .wlu-welcome-title {
+    font-weight: 700;
+    color: var(--wlu-purple-dark);
+    font-size: 0.98rem;
+}
+.wlu-welcome p {
+    margin: 0.4rem 0 0;
+    color: var(--wlu-ink-muted);
+    font-size: 0.92rem;
+    line-height: 1.6;
+}
+
+/* Sidebar */
+section[data-testid="stSidebar"] .wlu-side-title {
+    font-family: 'Poppins', sans-serif;
+    font-weight: 700;
+    font-size: 1.2rem;
+    color: var(--wlu-purple-dark);
+    margin-bottom: 1rem;
+}
+.wlu-status-card {
+    background: #FFFFFF;
+    border: 1px solid var(--wlu-border);
+    border-radius: 10px;
+    padding: 0.85rem 1rem;
+    margin-bottom: 1rem;
+}
+.wlu-status-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.32rem 0;
+    font-size: 0.85rem;
+}
+.wlu-status-row + .wlu-status-row {
+    border-top: 1px solid var(--wlu-border);
+}
+.wlu-status-row .wlu-label {
+    color: var(--wlu-ink-muted);
+    display: flex;
+    align-items: center;
+}
+.wlu-status-row .wlu-value {
+    font-weight: 600;
+    color: var(--wlu-ink);
+}
+.wlu-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--wlu-online);
+    margin-right: 7px;
+    box-shadow: 0 0 0 3px rgba(31, 157, 85, 0.15);
+}
+.wlu-version {
+    text-align: center;
+    font-size: 0.76rem;
+    color: var(--wlu-ink-muted);
+    margin-top: 1.25rem;
+    padding-top: 0.85rem;
+    border-top: 1px solid var(--wlu-border);
+}
+
+/* Chat bubbles */
+div[data-testid="stChatMessage"] {
+    border: 1px solid var(--wlu-border);
+    border-radius: 14px;
+    box-shadow: 0 1px 3px rgba(32, 28, 46, 0.04);
+}
+
+/* Suggested-question buttons */
+.stButton > button {
+    border-radius: 999px !important;
+    border: 1px solid var(--wlu-border) !important;
+    font-size: 0.86rem !important;
+    color: var(--wlu-ink) !important;
+    transition: border-color 0.15s ease, color 0.15s ease;
+}
+.stButton > button:hover {
+    border-color: var(--wlu-purple) !important;
+    color: var(--wlu-purple) !important;
+}
+</style>
+"""
+
+
+# -----------------------------
 # Streamlit UI
 # -----------------------------
 
@@ -324,22 +486,42 @@ st.set_page_config(
     layout="centered"
 )
 
-st.title(
-    "WLU Hybrid RAG Assistant"
+st.markdown(
+    CUSTOM_CSS,
+    unsafe_allow_html=True
 )
 
-st.caption(
-    "Ask questions about Wilfrid Laurier University courses, "
-    "programs, faculty, admissions, scholarships, tuition, and "
-    "student services."
+st.markdown(
+    """
+    <div class="wlu-hero">
+        <h1>WLU Hybrid RAG Assistant</h1>
+        <p class="wlu-tagline">Grounded AI Assistant for Wilfrid Laurier University</p>
+        <p class="wlu-desc">
+            Hybrid RAG combines deterministic structured retrieval over
+            real WLU data with vector search and an LLM, so every answer
+            about courses, programs, faculty, admissions, tuition, and
+            student services is grounded in scraped WLU records - never
+            general knowledge.
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True
 )
 
-st.info(
-    "👋 **Welcome!** I'm a hybrid RAG assistant for Wilfrid Laurier "
-    "University. I can help with course details, program and "
-    "admission requirements, faculty profiles, scholarships, "
-    "tuition, and student services - grounded in real WLU data, "
-    "not general knowledge."
+st.markdown(
+    """
+    <div class="wlu-welcome">
+        <span class="wlu-welcome-title">👋 Welcome!</span>
+        <p>
+            I'm a hybrid RAG assistant for Wilfrid Laurier University.
+            I can help with course details, program and admission
+            requirements, faculty profiles, scholarships, tuition, and
+            student services - grounded in real WLU data, not general
+            knowledge.
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True
 )
 
 
@@ -349,19 +531,29 @@ st.info(
 
 with st.sidebar:
 
-    st.markdown("## 🎓 WLU Hybrid RAG Assistant")
-
-    st.divider()
-
-    st.markdown("### 🛠️ Technology Stack")
     st.markdown(
-        "- Python\n"
-        "- Streamlit\n"
-        "- ChromaDB\n"
-        "- SQLite\n"
-        "- Sentence Transformers\n"
-        "- OpenAI GPT\n"
-        "- Hybrid RAG"
+        '<div class="wlu-side-title">🎓 WLU Hybrid RAG Assistant</div>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        """
+        <div class="wlu-status-card">
+            <div class="wlu-status-row">
+                <span class="wlu-label"><span class="wlu-dot"></span>Status</span>
+                <span class="wlu-value">Online</span>
+            </div>
+            <div class="wlu-status-row">
+                <span class="wlu-label">Model</span>
+                <span class="wlu-value">GPT-4o-mini</span>
+            </div>
+            <div class="wlu-status-row">
+                <span class="wlu-label">Retriever</span>
+                <span class="wlu-value">Hybrid RAG</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
     st.markdown("### 📚 Knowledge Sources")
@@ -371,12 +563,19 @@ with st.sidebar:
         "- WLU Website"
     )
 
+    st.divider()
+
     st.markdown("### ℹ️ About")
     st.markdown(
         "This assistant pairs deterministic structured retrieval "
         "(courses, programs, faculty) with vector search and an "
         "LLM, grounding every answer in real, scraped Wilfrid "
         "Laurier University data rather than general knowledge."
+    )
+
+    st.markdown(
+        '<div class="wlu-version">Version 1.0.0</div>',
+        unsafe_allow_html=True
     )
 
 
