@@ -6,6 +6,8 @@ import chromadb
 from rapidfuzz.distance import Levenshtein
 from sentence_transformers import SentenceTransformer
 
+import hybrid_rerank
+
 DB_DIR = "data/vector_db"
 MODEL_NAME = "all-MiniLM-L6-v2"
 
@@ -313,6 +315,12 @@ COURSE_PREREQUISITE_REFS_READY = _table_exists(
 PROGRAM_COURSE_REQUIREMENTS_READY = _table_exists(
     "data/programs.db", "program_course_requirements"
 )
+
+# policies.db doesn't exist until the Phase 2 policy-index load has been
+# run - detected the same way every other newer table is, so search_policy
+# can no-op gracefully rather than raising in an environment that
+# predates it.
+POLICIES_DB_READY = _table_exists("data/policies.db", "policies")
 
 
 # --- Deterministic course-NAME lookup (course-CODE lookup, above the
@@ -2072,17 +2080,78 @@ def search_undergraduate_program_list(question, memory=None):
     )
 
 
+# --- Fact-lookup intent: a reusable pattern, not a coordinator-specific
+# exception ---
+#
+# A "fact lookup" question asks for exactly one already-known field on
+# an entity (coordinator, email, phone, office) rather than a general
+# description of it. Root cause this exists to fix: every structured
+# branch below used to build an entity's FULL context (description,
+# admission/program requirements, biography, ...) unconditionally, and
+# only ever *appended* a fact like the coordinator on top of that - so
+# "who is the coordinator for X" returned the entire program/department
+# page with the answer buried at the bottom (confirmed live: a 6,630-
+# character response for a one-line question). Detecting fact intent
+# BEFORE building any context, and returning a small "<Entity>: <name>
+# \n<Fact Label>: <value>" context INSTEAD of the full one, fixes this
+# for every entity type through one shared mechanism - a new fact key
+# only ever needs one new trigger pattern plus one entry in the calling
+# branch's `valid_facts` tuple, never a new bespoke code path.
+_FACT_TRIGGER_PATTERNS = {
+    "coordinator": re.compile(
+        r"\b(?:coordinat\w*|advisor|advising|chair|director)\b", re.IGNORECASE
+    ),
+    "email": re.compile(r"\bemail\b", re.IGNORECASE),
+    "phone": re.compile(r"\bphone(?:\s*number)?\b", re.IGNORECASE),
+    "office": re.compile(r"\boffice(?:\s*location)?\b", re.IGNORECASE),
+}
+
+
+def _detect_fact_intent(question_lower, valid_facts):
+    """The first fact key from `valid_facts` (an ordered sequence of
+    keys into _FACT_TRIGGER_PATTERNS) whose trigger pattern matches the
+    question, or None. `valid_facts` scopes detection to whichever facts
+    are actually meaningful for the calling branch's entity type - e.g.
+    "email" is never checked for a program/department question, since
+    neither has an email field."""
+
+    for fact_key in valid_facts:
+
+        if _FACT_TRIGGER_PATTERNS[fact_key].search(question_lower):
+            return fact_key
+
+    return None
+
+
+def _fact_context(entity_label, entity_name, fact_label, fact_value):
+    """The shared, minimal context every fact-lookup branch returns:
+    just the entity's identifying name and the single requested fact -
+    never the entity's full description/biography/requirements.
+    `fact_label` is expected to already be entity-prefixed ("Program
+    Coordinator", "Department Coordinator") so the graceful-fallback
+    text it produces ("Program Coordinator information is not
+    available.") matches the exact wording every existing caller/test
+    already relies on."""
+
+    value_text = (
+        fact_value.strip() if fact_value and fact_value.strip()
+        else f"{fact_label} information is not available."
+    )
+
+    return f"{entity_label}: {entity_name}\n{fact_label}: {value_text}"
+
+
 # Signals the user wants the program's *coordinator* specifically, not
 # just general program information - e.g. "Who is the program coordinator
-# for the Master of Applied Computing?", "Who coordinates the MBA?". A
-# prefix match covers every inflection (coordinator/coordinators/
-# coordinates/coordinate/coordinating) without enumerating them.
-_COORDINATOR_INTENT_PATTERN = re.compile(r"\bcoordinat\w*\b")
-
-
+# for the Master of Applied Computing?", "Who coordinates the MBA?".
+# Delegates to the fact-intent trigger table above (which also
+# recognizes "advisor"/"chair"/"director" as the same intent) so the two
+# faculty-list/department-list guard call sites elsewhere in this
+# cascade and the two coordinator-answering branches below always agree
+# on what counts as coordinator intent, rather than drifting apart.
 def _has_coordinator_intent(question_lower):
 
-    return bool(_COORDINATOR_INTENT_PATTERN.search(question_lower))
+    return _detect_fact_intent(question_lower, ("coordinator",)) is not None
 
 
 # programs.db has no department_name/coordinator field of its own, but
@@ -2143,12 +2212,15 @@ def _get_department_coordinator(program_source_url):
 # word department names ("Physics and Computer Science") are already
 # specific enough that a whole-phrase match alone is safe - this gate
 # only applies to the single-word case.
-# "coordinat*" (Sprint 10E) is included here too: "who is the
-# coordinator of Biology?" has no other academic-signal word at all, but
-# asking about an academic coordinator is itself never a coincidental,
-# non-WLU usage the way "history"/"music"/"english" commonly are.
+# "coordinat*"/"advisor"/"chair"/"director" (Sprint 10E, extended
+# alongside the fact-lookup pattern above) are included here too: "who
+# is the coordinator of Biology?" has no other academic-signal word at
+# all, but asking about an academic coordinator (by any of these
+# equivalent titles) is itself never a coincidental, non-WLU usage the
+# way "history"/"music"/"english" commonly are.
 _DEPARTMENT_ACADEMIC_SIGNAL_PATTERN = re.compile(
-    r"\b(?:department|faculty\s+of|program|major|minor|degree|coordinat\w*|"
+    r"\b(?:department|faculty\s+of|program|major|minor|degree|"
+    r"coordinat\w*|advisor|advising|chair|director|"
     r"at\s+laurier|at\s+wlu|at\s+wilfrid\s+laurier)\b",
     re.IGNORECASE
 )
@@ -3364,6 +3436,81 @@ def _extract_program_query_phrase(question):
     return re.sub(r"\s+(?:program|degree)$", "", phrase, flags=re.IGNORECASE).strip()
 
 
+# --- Policy index lookup (Phase 2) ---
+#
+# Gated on the literal word "policy"/"policies" being present, which
+# nothing else in this cascade triggers on - so this can never collide
+# with or shadow any other structured branch, regardless of where it's
+# placed. Only number/title/source_url are stored (policies.db); the
+# policy BODY text isn't duplicated here and stays reachable through the
+# normal vector-search path like any other page, so a more open-ended
+# question ("is there a policy about group assignments?") still falls
+# through to hybrid_search() rather than being forced through this
+# lightweight index.
+_POLICY_KEYWORD_PATTERN = re.compile(r"\bpolic(?:y|ies)\b", re.IGNORECASE)
+_POLICY_NUMBER_PATTERN = re.compile(
+    r"\bpolic(?:y|ies)\b.{0,20}?\b(\d+(?:\.\d+)?)\b", re.IGNORECASE
+)
+
+
+def search_policy(question, memory=None):
+
+    if not POLICIES_DB_READY:
+        return None
+
+    if not _POLICY_KEYWORD_PATTERN.search(question):
+        return None
+
+    conn = sqlite3.connect("data/policies.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT policy_number, policy_title, source_url FROM policies"
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    def _return_policy(row):
+
+        if memory is not None:
+            _record_entity(
+                memory, "policy", row["policy_number"],
+                f"{row['policy_number']} - {row['policy_title']}",
+                "search_policy",
+            )
+
+        return (
+            f"Policy {row['policy_number']}: {row['policy_title']}",
+            row["source_url"],
+            "policy"
+        )
+
+    number_match = _POLICY_NUMBER_PATTERN.search(question)
+
+    if number_match:
+
+        target_number = number_match.group(1)
+
+        for row in rows:
+            if row["policy_number"] == target_number:
+                return _return_policy(row)
+
+    question_lower = question.lower()
+
+    for row in rows:
+
+        title = (row["policy_title"] or "").strip()
+
+        if len(title) < 4:
+            continue
+
+        if re.search(rf"\b{re.escape(title.lower())}\b", question_lower):
+            return _return_policy(row)
+
+    return None
+
+
 def structured_search(question, memory=None):
 
     # FOLLOWUP MEMORY
@@ -3383,6 +3530,20 @@ def structured_search(question, memory=None):
 
         elif memory.get("last_faculty"):
             question = memory["last_faculty"]
+
+        # "policy" (Phase 3) never had a legacy memory-dict slot like
+        # the four above - it only ever wrote to entity_history - so
+        # this reads that back directly via the same recency-aware
+        # helper _resolve_typed_value() uses. Substituted as "policy
+        # <number>", not the bare number: search_policy() gates on the
+        # literal word "policy"/"policies" being present (so a policy
+        # follow-up can never be confused with a course/program/
+        # department/faculty one), and many real policy titles (e.g.
+        # "12.2 Student Code of Conduct") don't themselves contain that
+        # word, so the bare number or display name alone wouldn't
+        # reliably re-trigger it.
+        elif (policy_entity := _latest_entity_of_type(memory, "policy")):
+            question = f"policy {policy_entity['entity_id']}"
 
     # FACULTY COURSES TAUGHT
     # Must run before the plain COURSE lookup below: "Who has taught
@@ -3477,6 +3638,25 @@ def structured_search(question, memory=None):
 
     if result:
 
+        # Fact lookup, checked BEFORE any of the program's full context
+        # is built: a coordinator question gets a concise "Program: X /
+        # Program Coordinator: Y" context and returns immediately,
+        # instead of that answer being appended to the end of the
+        # entire program page (the root cause fixed here - confirmed
+        # live, this used to produce a 6,630-character response to a
+        # one-line question).
+        program_fact_intent = _detect_fact_intent(question_lower, ("coordinator",))
+
+        if program_fact_intent == "coordinator":
+
+            coordinator = _get_department_coordinator(result[3])
+
+            context = _fact_context(
+                "Program", result[0], "Program Coordinator", coordinator
+            )
+
+            return (context, result[3], "coordinator")
+
         context = f"Program: {result[0]}\n{_program_level_line(result)}{_program_type_line(result)}"
 
         # Sprint 11B: Description/Admission Requirements/Program
@@ -3506,25 +3686,7 @@ def structured_search(question, memory=None):
         if requirements and requirements.strip():
             context += f"\nProgram Requirements:\n{requirements.strip()}\n"
 
-        # Coordinator info is only added when specifically asked for, so
-        # every other program query keeps producing exactly the context
-        # above, unchanged.
-        coordinator_intent = _has_coordinator_intent(question_lower)
-
-        if coordinator_intent:
-
-            coordinator = _get_department_coordinator(result[3])
-
-            context += (
-                f"\nProgram Coordinator:\n{coordinator}\n"
-                if coordinator else
-                "\nProgram Coordinator: Coordinator information is not available.\n"
-            )
-
-        return (
-            context, result[3],
-            "coordinator" if coordinator_intent else "program"
-        )
+        return (context, result[3], "program")
 
     # FACULTY-LEVEL LIST (e.g. "Faculty of Science", "Faculty of Arts")
     # Tried before the department-level list check: these are a small,
@@ -3581,6 +3743,24 @@ def structured_search(question, memory=None):
 
     if result:
 
+        # Fact lookup, checked BEFORE any of the department's full
+        # context is built - same reusable mechanism and same reasoning
+        # as the PROGRAM branch above: reads the existing `coordinator`
+        # column directly, never inferred from the free-text
+        # description, and returns immediately with a concise context
+        # instead of appending the answer to the full department page.
+        department_fact_intent = _detect_fact_intent(question_lower, ("coordinator",))
+
+        if department_fact_intent == "coordinator":
+
+            coordinator = result["coordinator"]
+
+            context = _fact_context(
+                "Department", result[0], "Department Coordinator", coordinator
+            )
+
+            return (context, result[3], "coordinator")
+
         faculty_name = result["faculty_name"]
 
         context = f"""
@@ -3594,28 +3774,7 @@ Description:
 {result[2]}
 """
 
-        # Department coordinator (Sprint 10E) - only added when
-        # specifically asked for, mirroring the PROGRAM coordinator
-        # pattern above exactly: reads the existing `coordinator` column
-        # directly, never inferred from the free-text description, and
-        # every other department query keeps producing exactly the
-        # context above, unchanged.
-        coordinator_intent = _has_coordinator_intent(question_lower)
-
-        if coordinator_intent:
-
-            coordinator = result["coordinator"]
-
-            context += (
-                f"\nDepartment Coordinator:\n{coordinator.strip()}\n"
-                if coordinator and coordinator.strip() else
-                "\nDepartment Coordinator: Coordinator information is not available.\n"
-            )
-
-        return (
-            context, result[3],
-            "coordinator" if coordinator_intent else "department_profile"
-        )
+        return (context, result[3], "department_profile")
 
     # FACULTY
 
@@ -3635,6 +3794,29 @@ Description:
         )
 
     if result:
+
+        # Fact lookup (same reusable mechanism as PROGRAM/DEPARTMENT
+        # above): "what's their email/phone/office" gets a concise
+        # "Name: X / Email: Y" context instead of the full profile
+        # (contact block + biography + research interests). Only
+        # reached once search_faculty() has already matched one specific
+        # named person, so this only ever narrows an already-resolved
+        # question - it can never cause a false person match on its own.
+        faculty_fact_intent = _detect_fact_intent(
+            question_lower, ("email", "phone", "office")
+        )
+
+        if faculty_fact_intent:
+
+            fact_value = {
+                "email": result[4], "phone": result[5], "office": result[6],
+            }[faculty_fact_intent]
+
+            fact_label = faculty_fact_intent.capitalize()
+
+            context = _fact_context("Name", result[0], fact_label, fact_value)
+
+            return context, result[9], "faculty_profile"
 
         context = f"""
 Name: {result[0]}
@@ -3711,6 +3893,16 @@ Research Interests:
             None,
             "not_found"
         )
+
+    # POLICY INDEX (Phase 2)
+    # Gated on the word "policy"/"policies" (see search_policy's own
+    # comment) - safe to try before the course-name fallback below since
+    # that gate makes collision with course/program/department/faculty
+    # names structurally impossible.
+    policy_result = search_policy(question, memory)
+
+    if policy_result:
+        return policy_result
 
     # COURSE NAME (last resort)
     # Tried dead last, after every other structured capability above -
@@ -4144,6 +4336,12 @@ def hybrid_search(question, memory=None):
     result = structured_search(question, memory)
 
     if result:
+
+        hybrid_rerank.record_debug_trace({
+            "question": question,
+            "structured_retrieval_used": True,
+        })
+
         return result
 
     # VECTOR SEARCH
@@ -4152,20 +4350,37 @@ def hybrid_search(question, memory=None):
         question
     )
 
-    ranked = _rerank_vector_candidates(question, results)
-
-    top = ranked[0]
-
-    # The confidence gate itself is unchanged - same threshold, same
-    # message, same follow-up exemption, same comparison basis (a raw,
-    # un-penalized embedding distance). Reranking only changes WHICH
-    # candidate is "the top result" the gate evaluates; it never changes
-    # the gate's own logic. Using top["distance"] (not top["score"], which
-    # includes the boilerplate/news/keyword adjustments used only to pick
-    # the winner) keeps that comparison basis identical to before -
-    # ranking quality and confidence gating are two independent concerns
-    # that happen to compose here.
-    top_distance = top["distance"]
+    # Restores the ORIGINAL calibration assumption the 1.19/1.23 data
+    # points (see _VECTOR_SEARCH_DISTANCE_THRESHOLD's own comment) were
+    # actually measured against: the single best raw dense match, from
+    # before any reranking existed at all (back when search_vector()
+    # fetched only 5 results and the gate checked their raw top-1).
+    # Chroma's .query() already orders results by ascending distance, so
+    # the minimum distance in this wider 15-candidate pool is exactly
+    # the closest neighbour in the whole collection - identical to what
+    # that narrower, unreranked top-1 query would have returned,
+    # regardless of how many candidates are actually requested.
+    #
+    # This was NOT what the gate checked before this fix.
+    # _rerank_vector_candidates() (metadata-aware reranking: title/URL
+    # keyword bonus + boilerplate/news penalty, added later to improve
+    # WHICH page gets shown/cited) had been repurposed as the gate's
+    # candidate source too, so a page whose title/URL merely shared a
+    # word with the question could outscore every genuinely close match
+    # and become the one distance checked against the threshold - even
+    # with a truly relevant, in-threshold page sitting right next to it
+    # in the same pool. Confirmed live: "Where is the Writing Centre?"
+    # was declined this way - the reranker's winner (title: "Accessible
+    # Learning Centre", matching "Centre" and "Writing" by coincidence)
+    # sat at distance 1.221 (over threshold), while a genuinely relevant
+    # page was sitting in the same pool at distance 1.098 (comfortably
+    # under it) and never got considered by the gate at all.
+    #
+    # BM25, Reciprocal Rank Fusion, and cross-encoder reranking below are
+    # completely unaffected by this - they still decide WHICH page
+    # answers the question once the gate has approved it; this only
+    # restores the gate's own yes/no input to its original basis.
+    top_distance = min(results["distances"][0])
 
     # Exempt recognized follow-up phrases ("tell me more", "explain",
     # ...): these carry no semantic content of their own to embed - the
@@ -4178,23 +4393,67 @@ def hybrid_search(question, memory=None):
         top_distance > _VECTOR_SEARCH_DISTANCE_THRESHOLD
         and normalize_followup_text(question) not in FOLLOWUP_PHRASES
     ):
+
+        hybrid_rerank.record_debug_trace({
+            "question": question,
+            "structured_retrieval_used": False,
+            "gate_passed": False,
+            "gate_top_distance": top_distance,
+        })
+
         return _NO_CONFIDENT_MATCH_MESSAGE, None, "not_found"
 
-    # Context is built only from the winning page's own chunk(s) - not a
-    # mix of several different candidates' pages, like the un-reranked
-    # version joined - so the single cited source below is genuinely what
-    # grounds the whole answer, never a page whose content never made it
-    # into context.
-    same_page_documents = [
-        document
-        for document, metadata in zip(results["documents"][0], results["metadatas"][0])
-        if metadata.get("url") == top["url"]
-    ]
+    # Gate passed - true hybrid retrieval now picks the best page: dense
+    # + BM25 candidates (chunk-level, not the gate's per-URL-deduped
+    # view), merged by Reciprocal Rank Fusion, reranked by a cross-
+    # encoder. hybrid_rerank.bm25_search transparently rebuilds its index
+    # whenever the underlying ChromaDB collection's chunk count changes
+    # (e.g. after refresh_pipeline.py), so no app restart is needed for
+    # it to pick up refreshed content.
+    dense_candidates = hybrid_rerank.dense_candidates_from_results(results)
+
+    bm25_candidates = hybrid_rerank.bm25_search(collection, question)
+
+    fused = hybrid_rerank.reciprocal_rank_fusion(dense_candidates, bm25_candidates)
+
+    reranked = hybrid_rerank.cross_encoder_rerank(question, fused)
+
+    winner = reranked[0]
+
+    winner_url = winner["url"]
+
+    # Context is built only from the winning page's own chunk(s) within
+    # the fused candidate pool - not a mix of several different
+    # candidates' pages - so the single cited source below is genuinely
+    # what grounds the whole answer, never a page whose content never
+    # made it into context.
+    seen_chunk_ids = set()
+    same_page_documents = []
+
+    for candidate in fused:
+
+        if candidate["url"] != winner_url or candidate["id"] in seen_chunk_ids:
+            continue
+
+        seen_chunk_ids.add(candidate["id"])
+        same_page_documents.append(candidate["document"])
 
     context = "\n\n".join(
         _strip_known_boilerplate_text(document) for document in same_page_documents
     )
 
-    source = top["url"]
+    source = winner_url
+
+    hybrid_rerank.record_debug_trace({
+        "question": question,
+        "structured_retrieval_used": False,
+        "gate_passed": True,
+        "gate_top_distance": top_distance,
+        "dense_candidates": dense_candidates,
+        "bm25_candidates": bm25_candidates,
+        "fused_ranking": fused,
+        "cross_encoder_scores": reranked,
+        "final_selected_chunk": winner,
+    })
 
     return context, source, "vector"

@@ -832,6 +832,92 @@ DEPARTMENT_COORDINATOR_TESTS = [
     ),
 ]
 
+# Protects: the faculty fact-lookup pattern (email/phone/office) - a
+# question about one specific faculty field returns a concise "Name: X /
+# <Field>: Y" answer instead of the entire profile (production-polish
+# fix, generalizes the same reusable mechanism the coordinator fact
+# lookup already used). Real, verified contact data (Dr. Shohini Ghose).
+# Pass criteria: each fact question returns exactly that fact; a plain
+# "who is X" question is unaffected and still returns the full profile.
+FACULTY_CONTACT_FACT_TESTS = [
+    TestCase(
+        name="Faculty email fact lookup",
+        turns=["What is Shohini Ghose's email?"],
+        check=lambda resp, at: contains_any(resp, "sghose@wlu.ca"),
+        category="Faculty Contact Facts",
+    ),
+    TestCase(
+        name="Faculty phone fact lookup",
+        turns=["What is Shohini Ghose's phone number?"],
+        check=lambda resp, at: contains_any(resp, "519.884.0710"),
+        category="Faculty Contact Facts",
+    ),
+    TestCase(
+        name="Faculty office fact lookup",
+        turns=["Where is Shohini Ghose's office?"],
+        check=lambda resp, at: contains_any(resp, "N2076H", "Science Building"),
+        category="Faculty Contact Facts",
+    ),
+    TestCase(
+        name="Non-fact faculty question unaffected (full profile still shown)",
+        turns=["Who is Shohini Ghose?"],
+        check=lambda resp, at: contains_any(resp, "Professor", "Faculty of Science"),
+        category="Faculty Contact Facts",
+    ),
+]
+
+# Protects: "advisor"/"chair"/"director" trigger the same coordinator
+# fact lookup as "coordinator" itself (the reusable fact-lookup pattern
+# is gated on a shared trigger set, not a coordinator-specific literal
+# string) - real, verified coordinator data (MAC's Dariush Ebrahimi/
+# Usama Mir, History's Susan Neylan). Note: these are the exact-word
+# noun forms ("chair", "director") the trigger pattern recognizes: verb
+# forms like "directs" are a different, unmatched inflection - not a
+# regression, just a phrasing outside this specific pattern's scope.
+COORDINATOR_SYNONYM_TESTS = [
+    TestCase(
+        name="'Advisor' resolves the same program coordinator as 'coordinator'",
+        turns=["Who is the advisor for the Master of Applied Computing?"],
+        check=lambda resp, at: contains_any(resp, "Dariush Ebrahimi", "Usama Mir"),
+        category="Coordinator Synonyms",
+    ),
+    TestCase(
+        name="'Chair' resolves the same department coordinator as 'coordinator'",
+        turns=["Who is the chair of the History department?"],
+        check=lambda resp, at: contains_any(resp, "Susan Neylan"),
+        category="Coordinator Synonyms",
+    ),
+    TestCase(
+        name="'Director' resolves the same program coordinator as 'coordinator'",
+        turns=["Who is the director of the Master of Applied Computing program?"],
+        check=lambda resp, at: contains_any(resp, "Dariush Ebrahimi", "Usama Mir"),
+        category="Coordinator Synonyms",
+    ),
+]
+
+# Protects: the confidence-gate calibration fix - the gate now checks
+# the raw best dense distance across the whole candidate pool, not a
+# title/URL-keyword-reranked candidate's distance. Before this fix,
+# "Where is the Writing Centre?" was declined: a coincidentally titled,
+# substantively unrelated page ("Accessible Learning Centre" - matching
+# both "writing"-adjacent and "centre" by pure word overlap) won the old
+# gate-selection heuristic despite a worse raw distance than genuinely
+# relevant content sitting in the very same candidate pool. Checked
+# against the exact sentinel text the gate's decline message uses, so
+# this fails loudly and specifically if the gate's calibration basis
+# ever regresses back to the reranked-candidate distance.
+HYBRID_RETRIEVAL_GATE_TESTS = [
+    TestCase(
+        name="Writing Centre question is answered, not declined (gate calibration fix)",
+        turns=["Where is the Writing Centre?"],
+        check=lambda resp, at: (
+            is_non_empty_response(resp)
+            and "couldn't find reliable information" not in resp.lower()
+        ),
+        category="Hybrid Retrieval Gate",
+    ),
+]
+
 # Protects: course prerequisite extraction and retrieval (Sprint 6F), via
 # the full chatbot. Pass criteria: a course with real prerequisites
 # states its actual required codes; a course with none says so plainly;
@@ -1173,6 +1259,9 @@ CATEGORIES = [
     ("Department False-Positive Prevention", "Dept False-Positive", DEPARTMENT_FALSE_POSITIVE_TESTS),
     ("Coordinator Lookup", "Coordinator", COORDINATOR_LOOKUP_TESTS),
     ("Department Coordinator", "Dept Coordinator", DEPARTMENT_COORDINATOR_TESTS),
+    ("Faculty Contact Facts", "Faculty Contact Facts", FACULTY_CONTACT_FACT_TESTS),
+    ("Coordinator Synonyms", "Coordinator Synonyms", COORDINATOR_SYNONYM_TESTS),
+    ("Hybrid Retrieval Gate", "Hybrid Gate", HYBRID_RETRIEVAL_GATE_TESTS),
     ("Course Prerequisites", "Prerequisites", COURSE_PREREQUISITE_TESTS),
     ("Course Metadata", "Course Metadata", COURSE_METADATA_TESTS),
     ("Graduate Program Requirements", "Grad Program Reqs", GRADUATE_PROGRAM_REQUIREMENTS_TESTS),
@@ -1200,6 +1289,9 @@ CAPABILITY_COVERAGE = [
     ("Person + topic courses-taught lookup", "Person + Topic Courses Taught"),
     ("Program coordinator lookup", "Coordinator Lookup"),
     ("Department coordinator lookup (existing coordinator column, entity-history follow-up)", "Department Coordinator"),
+    ("Faculty contact fact lookup (email/phone/office)", "Faculty Contact Facts"),
+    ("Coordinator synonym triggers (advisor/chair/director)", "Coordinator Synonyms"),
+    ("Confidence-gate calibration (raw best dense distance, not reranked-candidate distance)", "Hybrid Retrieval Gate"),
     ("Course prerequisites (direct/reverse/relational)", "Course Prerequisites"),
     ("Course metadata exposure (corequisites/exclusions/location/notes)", "Course Metadata"),
     ("Graduate program requirements (direct/reverse/relational)", "Graduate Program Requirements"),
@@ -2816,6 +2908,47 @@ def main():
         f"(out-of-scope questions decline gracefully, never fabricate): "
         f"{unsupported_passed}/{unsupported_total}"
     )
+
+    # -----------------------------
+    # Phase 4: benchmark evaluation framework. Runs after the regression
+    # suite above (whose behavior/output is completely unchanged by
+    # this addition) - a separate, additional evaluation against
+    # evaluation/benchmark.json, then an auto-generated evaluation_report.md.
+    # Imported lazily, matching this file's existing pattern of deferring
+    # app.py-touching imports until after an AppTest has already run one.
+    # -----------------------------
+
+    import benchmark_runner
+    import benchmark_report
+
+    print("\n" + "=" * 36)
+    print("Benchmark Evaluation")
+    print("=" * 36 + "\n")
+
+    benchmark_summary = benchmark_runner.run_benchmark()
+
+    regression_summary = {"passed": total_passed, "total": total_count}
+
+    report_path = benchmark_report.generate_report(
+        benchmark_summary, regression_summary
+    )
+
+    print("\n" + "=" * 36)
+    print("Benchmark Summary")
+    print("=" * 36 + "\n")
+
+    def _pct(value):
+        return f"{value * 100:.1f}%" if value is not None else "n/a"
+
+    print(f"Total Questions: {benchmark_summary['total_questions']}")
+    print(f"Answer Accuracy: {_pct(benchmark_summary['answer_accuracy'])}")
+    print(f"Citation Accuracy: {_pct(benchmark_summary['citation_accuracy'])}")
+    print(f"Hallucination Rate: {_pct(benchmark_summary['hallucination_rate'])}")
+    print(f"Retrieval Success Rate: {_pct(benchmark_summary['retrieval_success_rate'])}")
+    print(f"Structured Retrieval Accuracy: {_pct(benchmark_summary['structured_retrieval_accuracy'])}")
+    print(f"Hybrid Retrieval Accuracy: {_pct(benchmark_summary['hybrid_retrieval_accuracy'])}")
+    print(f"Average Response Time: {benchmark_summary['average_response_time']:.2f}s")
+    print(f"\nFull report written to: {report_path}")
 
 
 if __name__ == "__main__":

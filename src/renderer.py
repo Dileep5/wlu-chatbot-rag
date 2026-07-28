@@ -194,6 +194,14 @@ _CARD_CSS = """
     font-size: 0.8rem;
     padding: 0.4rem 0;
 }
+.wlu-card-footer a,
+.wlu-standalone-source a {
+    margin-right: 0.4rem;
+}
+.wlu-retrieval-date {
+    color: var(--wlu-ink-muted, #675F7D);
+    font-size: 0.72rem;
+}
 </style>
 """
 
@@ -273,17 +281,33 @@ def _section_html(title, body_html, icon="", highlight=False):
     )
 
 
-def _card_footer_html(source):
+def _citation_links_html(citation):
+    """Phase 3: one <a> per source (title as link text, falling back to
+    the bare URL when no title could be resolved), followed by the
+    citation's single retrieval date - shared by _card_footer_html() and
+    _render_source() so both citation surfaces stay in sync."""
 
-    if not source:
+    links = "".join(
+        f'<a href="{_esc(entry["url"])}" target="_blank" rel="noopener">'
+        f'{_esc(entry["title"] or entry["url"])}</a>'
+        for entry in citation["sources"]
+    )
+
+    return (
+        f"{links}"
+        f'<span class="wlu-retrieval-date">Retrieved: {_esc(citation["date"])}</span>'
+    )
+
+
+def _card_footer_html(citation):
+
+    if not citation:
         return ""
-
-    escaped_source = _esc(source)
 
     return (
         f'<div class="wlu-card-footer">'
         f'<span class="wlu-source-label">Source</span>'
-        f'<a href="{escaped_source}" target="_blank" rel="noopener">{escaped_source}</a>'
+        f"{_citation_links_html(citation)}"
         f"</div>"
     )
 
@@ -313,15 +337,14 @@ def _card_html(eyebrow, title, subtitle, body_sections, source):
     )
 
 
-def _render_source(source):
+def _render_source(citation):
 
-    if source:
-        escaped_source = _esc(source)
+    if citation:
         st.markdown(
             f"{_CARD_CSS}"
             f'<div class="wlu-standalone-source">'
             f'<span class="wlu-source-label">Source</span>'
-            f'<a href="{escaped_source}" target="_blank" rel="noopener">{escaped_source}</a>'
+            f"{_citation_links_html(citation)}"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -578,8 +601,27 @@ def render_faculty(answer, source):
 # Phase 13F: known labels the raw "program" context can contain
 # (search_program()'s own f-string in retriever.py) - same lookahead-
 # boundary pattern as course/faculty parsing.
+#
+# "Department", "Program Coordinator", and "Department Coordinator" are
+# included here too (production-polish fix): the shared "coordinator"
+# response_type is produced by either search_program() or
+# search_department() in retriever.py, and render_response()'s dispatch
+# always routes that response_type to render_program() - never
+# render_department() - regardless of which one produced it (see the
+# comment above _DEPARTMENT_FIELD_LABELS below). Before this fix,
+# "Program Coordinator"/"Department Coordinator" weren't recognized
+# label boundaries at all, so a program-coordinator answer's "Program:"
+# field had no lookahead boundary to stop at and swallowed the entire
+# coordinator text into the card title, while a department-coordinator
+# answer (text starting "Department:", never "Program:") failed to
+# parse at all and fell back to plain text under a mislabeled "🎓
+# Program" header. Both are fixed by _parse_program_fields() below
+# recognizing either shape.
 _PROGRAM_FIELD_LABELS = [
     "Program",
+    "Department",
+    "Program Coordinator",
+    "Department Coordinator",
     "Level",
     "Program Type",
     "Description",
@@ -623,12 +665,39 @@ def _parse_program_fields(answer):
     all (they're sentences/bulleted lists, not a label:value program
     sheet), so this correctly returns None for those and render_program()
     falls back to the original rendering - unchanged from before this
-    phase for all three."""
+    phase for all three.
+
+    Production-polish fix: also accepts a "Department: X" identifying
+    label (falling back to it only when "Program:" isn't present) and a
+    "Coordinator" value from either "Program Coordinator:" or
+    "Department Coordinator:" - the shared "coordinator" response_type
+    is produced by either search_program() or search_department() in
+    retriever.py, but render_response() always routes it through
+    render_program()/this parser regardless of which one produced it.
+    fields["Entity Kind"] records which shape was actually found, so
+    render_program() can label the card correctly either way."""
 
     fields = {
         display: _extract_labeled_field(raw, answer, _PROGRAM_FIELD_ALTERNATION)
         for display, raw in _PROGRAM_CARD_FIELD_MAP
     }
+
+    fields["Entity Kind"] = "Program"
+
+    if not fields["Program Name"]:
+
+        department_name = _extract_labeled_field(
+            "Department", answer, _PROGRAM_FIELD_ALTERNATION
+        )
+
+        if department_name:
+            fields["Program Name"] = department_name
+            fields["Entity Kind"] = "Department"
+
+    fields["Coordinator"] = (
+        _extract_labeled_field("Program Coordinator", answer, _PROGRAM_FIELD_ALTERNATION)
+        or _extract_labeled_field("Department Coordinator", answer, _PROGRAM_FIELD_ALTERNATION)
+    )
 
     if not fields["Program Name"]:
         return None
@@ -875,6 +944,16 @@ def render_program(answer, source):
 
     body_sections = [
         _meta_grid_html(meta_items),
+        # Coordinator placed first (production-polish fix): for a
+        # fact-lookup "coordinator" answer this is the entire point of
+        # the response - every other section below is empty/absent for
+        # that shape and gets filtered out by the `if s` below, so this
+        # is what actually shows. For a full program/department answer
+        # that also happens to include coordinator info, leading with it
+        # is still a reasonable, consistent position.
+        _section_html(
+            "Coordinator", _text_html(fields.get("Coordinator")), icon="👤",
+        ),
         _section_html(
             "Admission Requirements",
             _text_html(fields.get("Admission Requirements")),
@@ -895,9 +974,15 @@ def render_program(answer, source):
         ),
     ]
 
+    # Production-polish fix: the card is correctly labeled "Department"
+    # when this answer came from search_department() rather than
+    # search_program() (see _parse_program_fields()'s "Entity Kind"),
+    # instead of always showing "🎓 Program" regardless of source.
+    is_department = fields.get("Entity Kind") == "Department"
+
     st.markdown(
         _card_html(
-            eyebrow="🎓 Program",
+            eyebrow="🏛️ Department" if is_department else "🎓 Program",
             title=fields["Program Name"],
             subtitle=None,
             body_sections=[s for s in body_sections if s],
