@@ -36,6 +36,49 @@ IN_DOMAIN_KEYWORDS = [
     "international students",
     "enrolment",
     "enrollment",
+    # Campus services / student services / FAQ (Phase 2 corpus expansion
+    # added real coverage for these; the keyword list hadn't been
+    # extended to match, so legitimate questions about them were falling
+    # through to the LLM fallback and, for some phrasings, being
+    # misclassified as off-topic before ever reaching retrieval).
+    "faq",
+    "frequently asked questions",
+    "parking",
+    "transit",
+    "transportation",
+    "cycling",
+    "onecard",
+    "dining",
+    "housing",
+    "library",
+    "classroom",
+    "study space",
+    "wellness",
+    "mental health",
+    "counselling",
+    "counseling",
+    "accessible learning",
+    "accessibility",
+    "accommodation",
+    "indigenous",
+    "gendered violence",
+    "safety",
+    "security",
+    "constable",
+    "orientation",
+    "diversity",
+    "equity",
+    "immigration",
+    "sustainability",
+    "tech services",
+    "policy",
+    "policies",
+    "deadline",
+    "deadlines",
+    "petition",
+    "appeal",
+    "academic calendar",
+    "important dates",
 ]
 
 COURSE_CODE_PATTERN = re.compile(r"\b[A-Z]{2,4}\d{3}[A-Z]?\b")
@@ -71,9 +114,20 @@ def classify_with_llm(question: str) -> bool:
                 "role": "system",
                 "content": (
                     "Classify whether the user's message is about "
-                    "Wilfrid Laurier University - its programs, courses, "
-                    "admissions, tuition, faculty, campus, scholarships, "
-                    "student services, or departments.\n\n"
+                    "Wilfrid Laurier University (WLU) - this includes, but "
+                    "is not limited to: its programs, courses, admissions, "
+                    "tuition, faculty, campus, scholarships, departments, "
+                    "policies, and academic deadlines, as well as ANY "
+                    "campus service or student service a university "
+                    "typically offers, even if WLU or Laurier isn't named "
+                    "explicitly - e.g. parking, transit, dining, "
+                    "residence/housing, the library, classrooms and study "
+                    "spaces, OneCard, tech services, campus safety/security "
+                    "services, wellness and mental health support, "
+                    "accessible learning and accommodations, international "
+                    "student support, Indigenous student services, "
+                    "orientation, diversity and equity resources, and FAQ "
+                    "pages for any WLU program or service.\n\n"
                     "Reply with exactly one word: WLU or OFF_TOPIC."
                 )
             },
