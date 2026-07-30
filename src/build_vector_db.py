@@ -10,6 +10,8 @@ DB_DIR = BASE_DIR / "data" / "vector_db"
 # A small local embedding model
 MODEL_NAME = "all-MiniLM-L6-v2"
 
+COLLECTION_NAME = "wlu_chatbot_chunks"
+
 
 def main():
     # Load chunk data
@@ -21,8 +23,20 @@ def main():
     # Create ChromaDB persistent client
     client = chromadb.PersistentClient(path=str(DB_DIR))
 
+    # Rebuilding should not accumulate stale/duplicate entries from a
+    # previous run - matches build_faculty_vector_db.py's existing
+    # pattern. Without this, ChromaDB's add() silently no-ops on ids
+    # that already exist (confirmed empirically) rather than erroring or
+    # overwriting, so a weekly refresh would never actually update any
+    # previously-seen chunk's content - only chunk_id positions beyond
+    # the prior run's max would ever get written.
+    try:
+        client.delete_collection(COLLECTION_NAME)
+    except Exception:
+        pass
+
     # Create or get collection
-    collection = client.get_or_create_collection(name="wlu_chatbot_chunks")
+    collection = client.get_or_create_collection(name=COLLECTION_NAME)
 
     # Prepare data
     ids = []

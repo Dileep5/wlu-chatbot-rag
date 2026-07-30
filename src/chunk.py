@@ -33,6 +33,14 @@ def main():
         title = row["title"]
         text = row["clean_text"]
 
+        # A filtered/error row has empty text ("") in the source CSV,
+        # but pandas reads an empty cell back as NaN (a float), not "" -
+        # str.split() on that raises. Latent pre-existing gap, only
+        # exposed now because this run has far more filtered/error rows
+        # (empty text) than any prior run did.
+        if pd.isna(text):
+            continue
+
         chunks = split_into_chunks(text, CHUNK_SIZE)
 
         for chunk in chunks:

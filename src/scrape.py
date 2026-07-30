@@ -6,6 +6,8 @@ from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 
+import quality_filter
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 URLS_FILE = BASE_DIR / "urls.txt"
 OUTPUT_FILE = BASE_DIR / "outputs" / "raw_pages.csv"
@@ -30,10 +32,21 @@ def load_urls(file_path: Path) -> list[str]:
     return urls
 
 
-def fetch_page(url: str) -> tuple[str, str]:
-    """Download a webpage and return its title and cleaned text."""
+def fetch_page(url: str) -> tuple[str, str, str]:
+    """Download a webpage and return its title, cleaned text, and a
+    status - "success", or "filtered: <reason>" when the page fails one
+    of quality_filter's post-fetch checks (wrong content-type, below the
+    minimum content threshold). Raises on a real HTTP/network failure,
+    exactly as before - only the return shape changed, to carry the
+    filter outcome alongside the extracted content."""
+
     response = requests.get(url, headers=HEADERS, timeout=20)
     response.raise_for_status()
+
+    content_type = response.headers.get("Content-Type", "")
+
+    if not quality_filter.is_acceptable_content_type(content_type):
+        return "", "", f"filtered: non-HTML content-type ({content_type or 'unknown'})"
 
     soup = BeautifulSoup(response.text, "html.parser")
 
@@ -62,7 +75,11 @@ def fetch_page(url: str) -> tuple[str, str]:
             seen.add(line)
 
     cleaned_text = "\n".join(cleaned_lines)
-    return title, cleaned_text
+
+    if not quality_filter.has_sufficient_content(cleaned_text):
+        return title, cleaned_text, "filtered: below minimum content threshold"
+
+    return title, cleaned_text, "success"
 
 
 def main():
@@ -70,17 +87,39 @@ def main():
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     rows = []
+    seen_content_fingerprints = set()
+
     for url in urls:
         print(f"Scraping: {url}")
         try:
-            title, text = fetch_page(url)
-            rows.append({
-                "url": url,
-                "title": title,
-                "text": text,
-                "status": "success"
-            })
-            print(f"  -> Done: {title[:60]}")
+            title, text, status = fetch_page(url)
+
+            if status == "success":
+
+                fingerprint = quality_filter.content_fingerprint(text)
+
+                if fingerprint in seen_content_fingerprints:
+                    status = "filtered: duplicate content"
+                else:
+                    seen_content_fingerprints.add(fingerprint)
+
+            if status == "success":
+                rows.append({
+                    "url": url,
+                    "title": title,
+                    "text": text,
+                    "status": status
+                })
+                print(f"  -> Done: {title[:60]}")
+            else:
+                rows.append({
+                    "url": url,
+                    "title": "",
+                    "text": "",
+                    "status": status
+                })
+                print(f"  -> Skipped: {status}")
+
         except Exception as e:
             rows.append({
                 "url": url,
