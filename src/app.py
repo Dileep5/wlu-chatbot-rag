@@ -15,6 +15,7 @@ from retriever import (
 from conversation import is_conversation
 from domain_guard import is_wlu_related
 from renderer import render_response
+import citation
 
 # -----------------------------
 # Configuration
@@ -815,6 +816,15 @@ if query:
                 )
             )
 
+        # Phase 3: enriches whatever `source` each branch above already
+        # decided on (a bare URL string, or None for non-factual
+        # replies) into {"date", "sources": [{"title", "url"}, ...]} -
+        # purely a presentation step, run after every retrieval/routing
+        # decision above is already final. Stored in this enriched form
+        # so the history-replay loop below re-renders it identically
+        # without repeating any lookup.
+        source = citation.build_citation(source, response_type)
+
         with st.chat_message(
             "assistant"
         ):
@@ -843,8 +853,17 @@ if query:
 
     except Exception as e:
 
+        # Production polish: the user sees a friendly, generic message -
+        # raw exception text (e.g. "'NoneType' object has no attribute
+        # ...") is confusing and leaks implementation detail. The real
+        # exception is still printed to the console for whoever's
+        # running the app, unchanged in substance from before.
+        print(f"Unhandled error while answering {query!r}: {e}")
+
         error_msg = (
-            f"Bot Error: {e}"
+            "Sorry, something went wrong while answering that. "
+            "Please try rephrasing your question, or ask again in a "
+            "moment."
         )
 
         st.session_state.messages.append(
