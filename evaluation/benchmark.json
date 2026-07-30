@@ -1,0 +1,3252 @@
+[
+  {
+    "id": "COURSE_001",
+    "category": "Courses",
+    "turns": [
+      "What is AB101?"
+    ],
+    "expected_keywords": [
+      "AB101"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_002",
+    "category": "Courses",
+    "turns": [
+      "What is AB102?"
+    ],
+    "expected_keywords": [
+      "AB102"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_003",
+    "category": "Courses",
+    "turns": [
+      "What is BI326?"
+    ],
+    "expected_keywords": [
+      "BI326"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_004",
+    "category": "Courses",
+    "turns": [
+      "What is BI330?"
+    ],
+    "expected_keywords": [
+      "BI330"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_005",
+    "category": "Courses",
+    "turns": [
+      "What is BU467?"
+    ],
+    "expected_keywords": [
+      "BU467"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_006",
+    "category": "Courses",
+    "turns": [
+      "What is BU468?"
+    ],
+    "expected_keywords": [
+      "BU468"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_007",
+    "category": "Courses",
+    "turns": [
+      "What is BU833?"
+    ],
+    "expected_keywords": [
+      "BU833"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_008",
+    "category": "Courses",
+    "turns": [
+      "What is BU834?"
+    ],
+    "expected_keywords": [
+      "BU834"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_009",
+    "category": "Courses",
+    "turns": [
+      "What is CH340?"
+    ],
+    "expected_keywords": [
+      "CH340"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_010",
+    "category": "Courses",
+    "turns": [
+      "What is CH341?"
+    ],
+    "expected_keywords": [
+      "CH341"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_011",
+    "category": "Courses",
+    "turns": [
+      "What is CQ616?"
+    ],
+    "expected_keywords": [
+      "CQ616"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_012",
+    "category": "Courses",
+    "turns": [
+      "What is CQ617?"
+    ],
+    "expected_keywords": [
+      "CQ617"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_013",
+    "category": "Courses",
+    "turns": [
+      "What is DMJN308?"
+    ],
+    "expected_keywords": [
+      "DMJN308"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_014",
+    "category": "Courses",
+    "turns": [
+      "What is DMJN314?"
+    ],
+    "expected_keywords": [
+      "DMJN314"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_015",
+    "category": "Courses",
+    "turns": [
+      "What is EN265?"
+    ],
+    "expected_keywords": [
+      "EN265"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_016",
+    "category": "Courses",
+    "turns": [
+      "What is EN266?"
+    ],
+    "expected_keywords": [
+      "EN266"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_017",
+    "category": "Courses",
+    "turns": [
+      "What is EU454?"
+    ],
+    "expected_keywords": [
+      "EU454"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_018",
+    "category": "Courses",
+    "turns": [
+      "What is EU455A?"
+    ],
+    "expected_keywords": [
+      "EU455A"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_019",
+    "category": "Courses",
+    "turns": [
+      "What is FS272?"
+    ],
+    "expected_keywords": [
+      "FS272"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_020",
+    "category": "Courses",
+    "turns": [
+      "What is FS275?"
+    ],
+    "expected_keywords": [
+      "FS275"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_021",
+    "category": "Courses",
+    "turns": [
+      "What is GG201?"
+    ],
+    "expected_keywords": [
+      "GG201"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "COURSE_022",
+    "category": "Courses",
+    "turns": [
+      "What is GS231?"
+    ],
+    "expected_keywords": [
+      "GS231"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_001",
+    "category": "Faculty",
+    "turns": [
+      "Who is Aadhaar Verma?"
+    ],
+    "expected_keywords": [
+      "Aadhaar Verma"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_002",
+    "category": "Faculty",
+    "turns": [
+      "Who is Abdelfettah Elkchirid?"
+    ],
+    "expected_keywords": [
+      "Abdelfettah Elkchirid"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_003",
+    "category": "Faculty",
+    "turns": [
+      "Who is Ali Hashemi?"
+    ],
+    "expected_keywords": [
+      "Ali Hashemi"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_004",
+    "category": "Faculty",
+    "turns": [
+      "Who is Alicia Sliwinski?"
+    ],
+    "expected_keywords": [
+      "Alicia Sliwinski"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_005",
+    "category": "Faculty",
+    "turns": [
+      "Who is Andrew Spring?"
+    ],
+    "expected_keywords": [
+      "Andrew Spring"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_006",
+    "category": "Faculty",
+    "turns": [
+      "Who is Andrew\u00a0Welsh?"
+    ],
+    "expected_keywords": [
+      "Andrew\u00a0Welsh"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_007",
+    "category": "Faculty",
+    "turns": [
+      "Who is Ashley Lebner?"
+    ],
+    "expected_keywords": [
+      "Ashley Lebner"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_008",
+    "category": "Faculty",
+    "turns": [
+      "Who is Ashwani Kumar Peetush?"
+    ],
+    "expected_keywords": [
+      "Ashwani Kumar Peetush"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_009",
+    "category": "Faculty",
+    "turns": [
+      "Who is Brenda Murphy?"
+    ],
+    "expected_keywords": [
+      "Brenda Murphy"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_010",
+    "category": "Faculty",
+    "turns": [
+      "Who is Brennan Connolly?"
+    ],
+    "expected_keywords": [
+      "Brennan Connolly"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_011",
+    "category": "Faculty",
+    "turns": [
+      "Who is Carolyn Greene?"
+    ],
+    "expected_keywords": [
+      "Carolyn Greene"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_012",
+    "category": "Faculty",
+    "turns": [
+      "Who is Carolyn MacTavish?"
+    ],
+    "expected_keywords": [
+      "Carolyn MacTavish"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_013",
+    "category": "Faculty",
+    "turns": [
+      "Who is Christine Knott?"
+    ],
+    "expected_keywords": [
+      "Christine Knott"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_014",
+    "category": "Faculty",
+    "turns": [
+      "Who is Christine Lei?"
+    ],
+    "expected_keywords": [
+      "Christine Lei"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_015",
+    "category": "Faculty",
+    "turns": [
+      "Who is Cristina Stoica?"
+    ],
+    "expected_keywords": [
+      "Cristina Stoica"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_016",
+    "category": "Faculty",
+    "turns": [
+      "Who is Cynthia Johnston Turner?"
+    ],
+    "expected_keywords": [
+      "Cynthia Johnston Turner"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_017",
+    "category": "Faculty",
+    "turns": [
+      "Who is David Ros\u00e9?"
+    ],
+    "expected_keywords": [
+      "David Ros\u00e9"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_018",
+    "category": "Faculty",
+    "turns": [
+      "Who is David Smith?"
+    ],
+    "expected_keywords": [
+      "David Smith"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_019",
+    "category": "Faculty",
+    "turns": [
+      "Who is Doron Nisani?"
+    ],
+    "expected_keywords": [
+      "Doron Nisani"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FACULTY_020",
+    "category": "Faculty",
+    "turns": [
+      "Who is Douglas Deutschman?"
+    ],
+    "expected_keywords": [
+      "Douglas Deutschman"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "wlu.ca/academics/faculties",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_001",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the All Honours BA Economics Program Requirements program."
+    ],
+    "expected_keywords": [
+      "All Honours BA Economics Program Requirements"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_002",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the Ancient Studies Minor program."
+    ],
+    "expected_keywords": [
+      "Ancient Studies Minor"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_003",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the Business Technology Management Option program."
+    ],
+    "expected_keywords": [
+      "Business Technology Management Option"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_004",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the Canadian Studies Minor program."
+    ],
+    "expected_keywords": [
+      "Canadian Studies Minor"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_005",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the Certificate in Quantitative Finance program."
+    ],
+    "expected_keywords": [
+      "Certificate in Quantitative Finance"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_006",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the Chemistry Minor program."
+    ],
+    "expected_keywords": [
+      "Chemistry Minor"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_007",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the Creative Writing Minor program."
+    ],
+    "expected_keywords": [
+      "Creative Writing Minor"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_008",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the Criminology Minor program."
+    ],
+    "expected_keywords": [
+      "Criminology Minor"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_009",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the Diploma in Opera program."
+    ],
+    "expected_keywords": [
+      "Diploma in Opera"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_010",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the Diploma in Spiritual Care and Psychotherapy program."
+    ],
+    "expected_keywords": [
+      "Diploma in Spiritual Care and Psychotherapy"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_011",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the French Minor program."
+    ],
+    "expected_keywords": [
+      "French Minor"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_012",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the French Option program."
+    ],
+    "expected_keywords": [
+      "French Option"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_013",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the General BA Political Science program."
+    ],
+    "expected_keywords": [
+      "General BA Political Science"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_014",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the General BA Religion and Culture program."
+    ],
+    "expected_keywords": [
+      "General BA Religion and Culture"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_015",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the Graduate Diploma program."
+    ],
+    "expected_keywords": [
+      "Graduate Diploma"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_016",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the Health Studies Minor program."
+    ],
+    "expected_keywords": [
+      "Health Studies Minor"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_017",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the Honours BA Communication Studies program."
+    ],
+    "expected_keywords": [
+      "Honours BA Communication Studies"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_018",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the Honours BA Economics program."
+    ],
+    "expected_keywords": [
+      "Honours BA Economics"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_019",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the Honours BA Global Studies program."
+    ],
+    "expected_keywords": [
+      "Honours BA Global Studies"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "PROGRAM_020",
+    "category": "Programs",
+    "turns": [
+      "Tell me about the Honours BA Mathematics program."
+    ],
+    "expected_keywords": [
+      "Honours BA Mathematics"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEPT_001",
+    "category": "Departments",
+    "turns": [
+      "Tell me about the Ancient Studies department."
+    ],
+    "expected_keywords": [
+      "Ancient Studies"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEPT_002",
+    "category": "Departments",
+    "turns": [
+      "Tell me about the Biology department."
+    ],
+    "expected_keywords": [
+      "Biology"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEPT_003",
+    "category": "Departments",
+    "turns": [
+      "Tell me about the Business department."
+    ],
+    "expected_keywords": [
+      "Business"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEPT_004",
+    "category": "Departments",
+    "turns": [
+      "Tell me about the Collaboration, Curation, and Creative Performance department."
+    ],
+    "expected_keywords": [
+      "Collaboration, Curation, and Creative Performance"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEPT_005",
+    "category": "Departments",
+    "turns": [
+      "Tell me about the Communication Studies department."
+    ],
+    "expected_keywords": [
+      "Communication Studies"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEPT_006",
+    "category": "Departments",
+    "turns": [
+      "Tell me about the Criminology Minor (Faculty of Human and Social Sciences) department."
+    ],
+    "expected_keywords": [
+      "Criminology Minor (Faculty of Human and Social Sciences)"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEPT_007",
+    "category": "Departments",
+    "turns": [
+      "Tell me about the Cultural Analysis and Social Theory department."
+    ],
+    "expected_keywords": [
+      "Cultural Analysis and Social Theory"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEPT_008",
+    "category": "Departments",
+    "turns": [
+      "Tell me about the Economics department."
+    ],
+    "expected_keywords": [
+      "Economics"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEPT_009",
+    "category": "Departments",
+    "turns": [
+      "Tell me about the Education department."
+    ],
+    "expected_keywords": [
+      "Education"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEPT_010",
+    "category": "Departments",
+    "turns": [
+      "Tell me about the Film Studies department."
+    ],
+    "expected_keywords": [
+      "Film Studies"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEPT_011",
+    "category": "Departments",
+    "turns": [
+      "Tell me about the General BSc without Designation department."
+    ],
+    "expected_keywords": [
+      "General BSc without Designation"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEPT_012",
+    "category": "Departments",
+    "turns": [
+      "Tell me about the History department."
+    ],
+    "expected_keywords": [
+      "History"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEPT_013",
+    "category": "Departments",
+    "turns": [
+      "Tell me about the International Public Policy department."
+    ],
+    "expected_keywords": [
+      "International Public Policy"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEPT_014",
+    "category": "Departments",
+    "turns": [
+      "Tell me about the Management Option (LSBE) department."
+    ],
+    "expected_keywords": [
+      "Management Option (LSBE)"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEPT_015",
+    "category": "Departments",
+    "turns": [
+      "Tell me about the Music department."
+    ],
+    "expected_keywords": [
+      "Music"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEPT_016",
+    "category": "Departments",
+    "turns": [
+      "Tell me about the Philosophy department."
+    ],
+    "expected_keywords": [
+      "Philosophy"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "academic-calendar.wlu.ca",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_001",
+    "category": "Policies",
+    "turns": [
+      "What is policy 1.1?"
+    ],
+    "expected_keywords": [
+      "1.1"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_002",
+    "category": "Policies",
+    "turns": [
+      "What is policy 2.1?"
+    ],
+    "expected_keywords": [
+      "2.1"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_003",
+    "category": "Policies",
+    "turns": [
+      "What is policy 2.7?"
+    ],
+    "expected_keywords": [
+      "2.7"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_004",
+    "category": "Policies",
+    "turns": [
+      "What is policy 2.8?"
+    ],
+    "expected_keywords": [
+      "2.8"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_005",
+    "category": "Policies",
+    "turns": [
+      "What is policy 4.13?"
+    ],
+    "expected_keywords": [
+      "4.13"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_006",
+    "category": "Policies",
+    "turns": [
+      "What is policy 4.14?"
+    ],
+    "expected_keywords": [
+      "4.14"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_007",
+    "category": "Policies",
+    "turns": [
+      "What is policy 4.3?"
+    ],
+    "expected_keywords": [
+      "4.3"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_008",
+    "category": "Policies",
+    "turns": [
+      "What is policy 4.4?"
+    ],
+    "expected_keywords": [
+      "4.4"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_009",
+    "category": "Policies",
+    "turns": [
+      "What is policy 4.9?"
+    ],
+    "expected_keywords": [
+      "4.9"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_010",
+    "category": "Policies",
+    "turns": [
+      "What is policy 5.1?"
+    ],
+    "expected_keywords": [
+      "5.1"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_011",
+    "category": "Policies",
+    "turns": [
+      "What is policy 5.13?"
+    ],
+    "expected_keywords": [
+      "5.13"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_012",
+    "category": "Policies",
+    "turns": [
+      "What is policy 5.14?"
+    ],
+    "expected_keywords": [
+      "5.14"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_013",
+    "category": "Policies",
+    "turns": [
+      "What is policy 5.18?"
+    ],
+    "expected_keywords": [
+      "5.18"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_014",
+    "category": "Policies",
+    "turns": [
+      "What is policy 5.19?"
+    ],
+    "expected_keywords": [
+      "5.19"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_015",
+    "category": "Policies",
+    "turns": [
+      "What is policy 5.9?"
+    ],
+    "expected_keywords": [
+      "5.9"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_016",
+    "category": "Policies",
+    "turns": [
+      "What is policy 6.1?"
+    ],
+    "expected_keywords": [
+      "6.1"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_017",
+    "category": "Policies",
+    "turns": [
+      "What is policy 7.13?"
+    ],
+    "expected_keywords": [
+      "7.13"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_018",
+    "category": "Policies",
+    "turns": [
+      "What is policy 7.14?"
+    ],
+    "expected_keywords": [
+      "7.14"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_019",
+    "category": "Policies",
+    "turns": [
+      "What is policy 7.18?"
+    ],
+    "expected_keywords": [
+      "7.18"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "POLICY_020",
+    "category": "Policies",
+    "turns": [
+      "What is policy 7.19?"
+    ],
+    "expected_keywords": [
+      "7.19"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "governance/assets/resources",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEADLINE_001",
+    "category": "Academic Deadlines",
+    "turns": [
+      "What is the last day to drop a course without academic penalty?"
+    ],
+    "expected_keywords": [
+      "deadline",
+      "drop",
+      "tuition",
+      "date",
+      "appeal",
+      "petition",
+      "calendar",
+      "term",
+      "registration",
+      "withdraw",
+      "exam",
+      "academic"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "calendars-and-petitions",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEADLINE_002",
+    "category": "Academic Deadlines",
+    "turns": [
+      "When is tuition due?"
+    ],
+    "expected_keywords": [
+      "deadline",
+      "drop",
+      "tuition",
+      "date",
+      "appeal",
+      "petition",
+      "calendar",
+      "term",
+      "registration",
+      "withdraw",
+      "exam",
+      "academic"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "calendars-and-petitions",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEADLINE_003",
+    "category": "Academic Deadlines",
+    "turns": [
+      "What are the important dates and deadlines for this academic year?"
+    ],
+    "expected_keywords": [
+      "deadline",
+      "drop",
+      "tuition",
+      "date",
+      "appeal",
+      "petition",
+      "calendar",
+      "term",
+      "registration",
+      "withdraw",
+      "exam",
+      "academic"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "calendars-and-petitions",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEADLINE_004",
+    "category": "Academic Deadlines",
+    "turns": [
+      "Where can I find the academic calendar?"
+    ],
+    "expected_keywords": [
+      "deadline",
+      "drop",
+      "tuition",
+      "date",
+      "appeal",
+      "petition",
+      "calendar",
+      "term",
+      "registration",
+      "withdraw",
+      "exam",
+      "academic"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "calendars-and-petitions",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEADLINE_005",
+    "category": "Academic Deadlines",
+    "turns": [
+      "What is the deadline to withdraw from a course?"
+    ],
+    "expected_keywords": [
+      "deadline",
+      "drop",
+      "tuition",
+      "date",
+      "appeal",
+      "petition",
+      "calendar",
+      "term",
+      "registration",
+      "withdraw",
+      "exam",
+      "academic"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "calendars-and-petitions",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEADLINE_006",
+    "category": "Academic Deadlines",
+    "turns": [
+      "How do I petition for an accommodation for a religious observance?"
+    ],
+    "expected_keywords": [
+      "deadline",
+      "drop",
+      "tuition",
+      "date",
+      "appeal",
+      "petition",
+      "calendar",
+      "term",
+      "registration",
+      "withdraw",
+      "exam",
+      "academic"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "calendars-and-petitions",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEADLINE_007",
+    "category": "Academic Deadlines",
+    "turns": [
+      "What is the process for a student appeal?"
+    ],
+    "expected_keywords": [
+      "deadline",
+      "drop",
+      "tuition",
+      "date",
+      "appeal",
+      "petition",
+      "calendar",
+      "term",
+      "registration",
+      "withdraw",
+      "exam",
+      "academic"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "calendars-and-petitions",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEADLINE_008",
+    "category": "Academic Deadlines",
+    "turns": [
+      "Where do I find the petitions and appeals procedures?"
+    ],
+    "expected_keywords": [
+      "deadline",
+      "drop",
+      "tuition",
+      "date",
+      "appeal",
+      "petition",
+      "calendar",
+      "term",
+      "registration",
+      "withdraw",
+      "exam",
+      "academic"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "calendars-and-petitions",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEADLINE_009",
+    "category": "Academic Deadlines",
+    "turns": [
+      "What are the academic calendars and governance pages about?"
+    ],
+    "expected_keywords": [
+      "deadline",
+      "drop",
+      "tuition",
+      "date",
+      "appeal",
+      "petition",
+      "calendar",
+      "term",
+      "registration",
+      "withdraw",
+      "exam",
+      "academic"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "calendars-and-petitions",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEADLINE_010",
+    "category": "Academic Deadlines",
+    "turns": [
+      "When does the winter term start?"
+    ],
+    "expected_keywords": [
+      "deadline",
+      "drop",
+      "tuition",
+      "date",
+      "appeal",
+      "petition",
+      "calendar",
+      "term",
+      "registration",
+      "withdraw",
+      "exam",
+      "academic"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "calendars-and-petitions",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEADLINE_011",
+    "category": "Academic Deadlines",
+    "turns": [
+      "What is the add/drop deadline?"
+    ],
+    "expected_keywords": [
+      "deadline",
+      "drop",
+      "tuition",
+      "date",
+      "appeal",
+      "petition",
+      "calendar",
+      "term",
+      "registration",
+      "withdraw",
+      "exam",
+      "academic"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "calendars-and-petitions",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEADLINE_012",
+    "category": "Academic Deadlines",
+    "turns": [
+      "How do I appeal an academic decision?"
+    ],
+    "expected_keywords": [
+      "deadline",
+      "drop",
+      "tuition",
+      "date",
+      "appeal",
+      "petition",
+      "calendar",
+      "term",
+      "registration",
+      "withdraw",
+      "exam",
+      "academic"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "calendars-and-petitions",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEADLINE_013",
+    "category": "Academic Deadlines",
+    "turns": [
+      "What are the Senate student appeal procedures?"
+    ],
+    "expected_keywords": [
+      "deadline",
+      "drop",
+      "tuition",
+      "date",
+      "appeal",
+      "petition",
+      "calendar",
+      "term",
+      "registration",
+      "withdraw",
+      "exam",
+      "academic"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "calendars-and-petitions",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEADLINE_014",
+    "category": "Academic Deadlines",
+    "turns": [
+      "When is the deadline to apply for graduation?"
+    ],
+    "expected_keywords": [
+      "deadline",
+      "drop",
+      "tuition",
+      "date",
+      "appeal",
+      "petition",
+      "calendar",
+      "term",
+      "registration",
+      "withdraw",
+      "exam",
+      "academic"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "calendars-and-petitions",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEADLINE_015",
+    "category": "Academic Deadlines",
+    "turns": [
+      "What deadlines apply to registration?"
+    ],
+    "expected_keywords": [
+      "deadline",
+      "drop",
+      "tuition",
+      "date",
+      "appeal",
+      "petition",
+      "calendar",
+      "term",
+      "registration",
+      "withdraw",
+      "exam",
+      "academic"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "calendars-and-petitions",
+    "requires_retrieval": true
+  },
+  {
+    "id": "DEADLINE_016",
+    "category": "Academic Deadlines",
+    "turns": [
+      "Where can I check exam-related dates?"
+    ],
+    "expected_keywords": [
+      "deadline",
+      "drop",
+      "tuition",
+      "date",
+      "appeal",
+      "petition",
+      "calendar",
+      "term",
+      "registration",
+      "withdraw",
+      "exam",
+      "academic"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "calendars-and-petitions",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_001",
+    "category": "Campus Services",
+    "turns": [
+      "Where can I find accessible parking on campus?"
+    ],
+    "expected_keywords": [
+      "parking",
+      "accessible"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_002",
+    "category": "Campus Services",
+    "turns": [
+      "What is OneCard and how do I get one?"
+    ],
+    "expected_keywords": [
+      "onecard",
+      "card"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_003",
+    "category": "Campus Services",
+    "turns": [
+      "What dining options are available on campus?"
+    ],
+    "expected_keywords": [
+      "dining",
+      "food",
+      "meal"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_004",
+    "category": "Campus Services",
+    "turns": [
+      "What study spaces are available at the Brantford campus?"
+    ],
+    "expected_keywords": [
+      "study",
+      "brantford",
+      "space"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_005",
+    "category": "Campus Services",
+    "turns": [
+      "How do I apply for residence?"
+    ],
+    "expected_keywords": [
+      "residence",
+      "housing",
+      "apply"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_006",
+    "category": "Campus Services",
+    "turns": [
+      "What tech services are available to students?"
+    ],
+    "expected_keywords": [
+      "tech",
+      "technology",
+      "account"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_007",
+    "category": "Campus Services",
+    "turns": [
+      "What are Laurier's sustainability initiatives?"
+    ],
+    "expected_keywords": [
+      "sustainability",
+      "sustainable"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_008",
+    "category": "Campus Services",
+    "turns": [
+      "How do I report a problem with a classroom?"
+    ],
+    "expected_keywords": [
+      "classroom",
+      "report",
+      "problem"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_009",
+    "category": "Campus Services",
+    "turns": [
+      "What cycling and transit options are available?"
+    ],
+    "expected_keywords": [
+      "cycling",
+      "transit",
+      "transportation"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_010",
+    "category": "Campus Services",
+    "turns": [
+      "Where are the labs and equipment for students located?"
+    ],
+    "expected_keywords": [
+      "lab",
+      "equipment"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_011",
+    "category": "Campus Services",
+    "turns": [
+      "What is the Special Constable Service?"
+    ],
+    "expected_keywords": [
+      "special constable",
+      "safety",
+      "security"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_012",
+    "category": "Campus Services",
+    "turns": [
+      "What electric vehicle charging is available on campus?"
+    ],
+    "expected_keywords": [
+      "electric vehicle",
+      "charging"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_013",
+    "category": "Campus Services",
+    "turns": [
+      "What study spaces are available at the Waterloo campus?"
+    ],
+    "expected_keywords": [
+      "study",
+      "waterloo",
+      "space"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_014",
+    "category": "Campus Services",
+    "turns": [
+      "How do OneCard deposits and refunds work?"
+    ],
+    "expected_keywords": [
+      "onecard",
+      "deposit",
+      "refund"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_015",
+    "category": "Campus Services",
+    "turns": [
+      "What is the Level One Lounge?"
+    ],
+    "expected_keywords": [
+      "level one",
+      "lounge"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_016",
+    "category": "Campus Services",
+    "turns": [
+      "How do I access campus wifi or accounts?"
+    ],
+    "expected_keywords": [
+      "account",
+      "wifi",
+      "tech"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_017",
+    "category": "Campus Services",
+    "turns": [
+      "What campus safety services are available?"
+    ],
+    "expected_keywords": [
+      "safety",
+      "security",
+      "constable"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "CAMPUS_018",
+    "category": "Campus Services",
+    "turns": [
+      "What parking options are available for students?"
+    ],
+    "expected_keywords": [
+      "parking"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "campus-services",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_001",
+    "category": "Student Services",
+    "turns": [
+      "What support is available for international students?"
+    ],
+    "expected_keywords": [
+      "international",
+      "support"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_002",
+    "category": "Student Services",
+    "turns": [
+      "What mental health resources are available to students?"
+    ],
+    "expected_keywords": [
+      "mental health",
+      "wellness",
+      "support"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_003",
+    "category": "Student Services",
+    "turns": [
+      "What services does the Student Wellness Centre offer?"
+    ],
+    "expected_keywords": [
+      "wellness",
+      "health"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_004",
+    "category": "Student Services",
+    "turns": [
+      "What support is available for accessible learning?"
+    ],
+    "expected_keywords": [
+      "accessible",
+      "learning",
+      "accommodation"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_005",
+    "category": "Student Services",
+    "turns": [
+      "What is available through Indigenous Student Services?"
+    ],
+    "expected_keywords": [
+      "indigenous",
+      "student services"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_006",
+    "category": "Student Services",
+    "turns": [
+      "Who is the Dean of Students and what do they do?"
+    ],
+    "expected_keywords": [
+      "dean of students",
+      "dean"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_007",
+    "category": "Student Services",
+    "turns": [
+      "What athletics and recreation options are available to students?"
+    ],
+    "expected_keywords": [
+      "athletics",
+      "recreation"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_008",
+    "category": "Student Services",
+    "turns": [
+      "What support exists for gendered violence prevention?"
+    ],
+    "expected_keywords": [
+      "gendered violence",
+      "prevention",
+      "support"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_009",
+    "category": "Student Services",
+    "turns": [
+      "What orientation programs are available for new students?"
+    ],
+    "expected_keywords": [
+      "orientation"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_010",
+    "category": "Student Services",
+    "turns": [
+      "What diversity and equity resources are available?"
+    ],
+    "expected_keywords": [
+      "diversity",
+      "equity"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_011",
+    "category": "Student Services",
+    "turns": [
+      "What immigration support is available for international students?"
+    ],
+    "expected_keywords": [
+      "immigration",
+      "international"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_012",
+    "category": "Student Services",
+    "turns": [
+      "What financial support is available through Indigenous Student Services?"
+    ],
+    "expected_keywords": [
+      "financial",
+      "indigenous",
+      "funding"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_013",
+    "category": "Student Services",
+    "turns": [
+      "What counselling services are available to students?"
+    ],
+    "expected_keywords": [
+      "counselling",
+      "wellness",
+      "support"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_014",
+    "category": "Student Services",
+    "turns": [
+      "What accommodations exist for students with disabilities?"
+    ],
+    "expected_keywords": [
+      "accommodation",
+      "accessible",
+      "disability"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_015",
+    "category": "Student Services",
+    "turns": [
+      "What support is available for Black and racialized students?"
+    ],
+    "expected_keywords": [
+      "black",
+      "racialized",
+      "support"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_016",
+    "category": "Student Services",
+    "turns": [
+      "What is the process for booking a sexual violence prevention workshop?"
+    ],
+    "expected_keywords": [
+      "workshop",
+      "violence",
+      "prevention"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_017",
+    "category": "Student Services",
+    "turns": [
+      "What 2SLGBTQ+ care is available at the Wellness Centre?"
+    ],
+    "expected_keywords": [
+      "2slgbtq",
+      "wellness",
+      "care"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "STUDENTSVC_018",
+    "category": "Student Services",
+    "turns": [
+      "What academic advising support is available to students?"
+    ],
+    "expected_keywords": [
+      "advising",
+      "academic",
+      "support"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": "support-and-wellness",
+    "requires_retrieval": true
+  },
+  {
+    "id": "FAQ_001",
+    "category": "FAQ",
+    "turns": [
+      "What are the FAQs for applying to co-op?"
+    ],
+    "expected_keywords": [
+      "co-op",
+      "faq",
+      "application"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "FAQ_002",
+    "category": "FAQ",
+    "turns": [
+      "What frequently asked questions exist about MSW program requirements?"
+    ],
+    "expected_keywords": [
+      "faq",
+      "msw",
+      "social work",
+      "frequently asked"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "FAQ_003",
+    "category": "FAQ",
+    "turns": [
+      "What are the FAQs for Sussex LLB applicants?"
+    ],
+    "expected_keywords": [
+      "sussex",
+      "llb",
+      "faq"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "FAQ_004",
+    "category": "FAQ",
+    "turns": [
+      "What are the deferred examination petition FAQs for Science students?"
+    ],
+    "expected_keywords": [
+      "deferred",
+      "examination",
+      "faq",
+      "petition"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "FAQ_005",
+    "category": "FAQ",
+    "turns": [
+      "What FAQs exist about music program and course offerings?"
+    ],
+    "expected_keywords": [
+      "music",
+      "faq",
+      "course"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "FAQ_006",
+    "category": "FAQ",
+    "turns": [
+      "What FAQs exist for the Social Work professional development offerings?"
+    ],
+    "expected_keywords": [
+      "social work",
+      "faq",
+      "professional development"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "FAQ_007",
+    "category": "FAQ",
+    "turns": [
+      "What is the test or exam FAQ for accessible learning?"
+    ],
+    "expected_keywords": [
+      "test",
+      "exam",
+      "faq",
+      "accessible learning"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "FAQ_008",
+    "category": "FAQ",
+    "turns": [
+      "What are the FAQs for co-op employers?"
+    ],
+    "expected_keywords": [
+      "co-op",
+      "employer",
+      "faq"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "FAQ_009",
+    "category": "FAQ",
+    "turns": [
+      "What FAQs exist about the Metalworks partnership?"
+    ],
+    "expected_keywords": [
+      "metalworks",
+      "faq"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "FAQ_010",
+    "category": "FAQ",
+    "turns": [
+      "What is the job hunting FAQ guide about?"
+    ],
+    "expected_keywords": [
+      "job",
+      "faq",
+      "hunting"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "FAQ_011",
+    "category": "FAQ",
+    "turns": [
+      "What are the FAQs for Arts direct entry to co-op?"
+    ],
+    "expected_keywords": [
+      "arts",
+      "co-op",
+      "faq"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "FAQ_012",
+    "category": "FAQ",
+    "turns": [
+      "What are the PSAC negotiations FAQs?"
+    ],
+    "expected_keywords": [
+      "psac",
+      "faq",
+      "negotiation"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "CONV_001",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "hi"
+    ],
+    "expected_keywords": [
+      "Wilfrid Laurier",
+      "help"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "CONV_002",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "hello"
+    ],
+    "expected_keywords": [
+      "Wilfrid Laurier",
+      "help"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "CONV_003",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "good morning"
+    ],
+    "expected_keywords": [
+      "Wilfrid Laurier",
+      "help"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "CONV_004",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "how are you"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "CONV_005",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "who are you"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "CONV_006",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "what can you do"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "CONV_007",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "thank you"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "CONV_008",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "What is AB101?",
+      "tell me more"
+    ],
+    "expected_keywords": [
+      "AB101"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": true,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "CONV_009",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "What is AB101?",
+      "Does it have prerequisites?"
+    ],
+    "expected_keywords": [
+      "AB101",
+      "prerequisite"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "CONV_010",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "Tell me about the Economics department.",
+      "tell me more"
+    ],
+    "expected_keywords": [
+      "Economics"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "CONV_011",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "Tell me about the Honours BA Economics program.",
+      "explain"
+    ],
+    "expected_keywords": [
+      "Economics"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "CONV_012",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "What is policy 12.2?",
+      "tell me more"
+    ],
+    "expected_keywords": [
+      "12.2"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "CONV_013",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "tell me more"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "CONV_014",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "Who is Shohini Ghose?",
+      "what does she research?"
+    ],
+    "expected_keywords": [
+      "Ghose",
+      "research"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "CONV_015",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "What is the Honours BSc Computer Science program?",
+      "what are the admission requirements?"
+    ],
+    "expected_keywords": [
+      "admission",
+      "requirement",
+      "Computer Science"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": true
+  },
+  {
+    "id": "CONV_016",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "hey"
+    ],
+    "expected_keywords": [
+      "Wilfrid Laurier",
+      "help"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "CONV_017",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "hey"
+    ],
+    "expected_keywords": [
+      "Wilfrid Laurier",
+      "help"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "CONV_018",
+    "category": "Conversation / Follow-up",
+    "turns": [
+      "hey"
+    ],
+    "expected_keywords": [
+      "Wilfrid Laurier",
+      "help"
+    ],
+    "match_mode": "any",
+    "expect_decline": false,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_001",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "What is the capital of France?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_002",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "What's the weather like today?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_003",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "Who won the Super Bowl last year?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_004",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "Can you write me a Python script to sort a list?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_005",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "What is the best pizza topping?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_006",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "How do I fix my car's engine?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_007",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "What is the population of Tokyo?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_008",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "What is the airspeed velocity of an unladen swallow?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_009",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "What's the stock price of Apple?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_010",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "How do I bake a chocolate cake?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_011",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "What is the tuition at the University of Toronto?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_012",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "What is ZZ999?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_013",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "Tell me about the Doctor of Underwater Basket Weaving program."
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_014",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "Who is Professor Xavier Nonexistent?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_015",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "What is policy 99.9?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_016",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "Tell me about the Department of Time Travel Studies."
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_017",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "What is CP000000?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_018",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "Who teaches XX123?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_019",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "What is the Bachelor of Dragon Riding program?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_020",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "Tell me about policy 0.0."
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_021",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "Who is Dr. Fictional Person at WLU?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  },
+  {
+    "id": "UNSUPPORTED_022",
+    "category": "Unsupported / Out-of-domain",
+    "turns": [
+      "What are the requirements for the Master of Imaginary Science?"
+    ],
+    "expected_keywords": [],
+    "match_mode": "any",
+    "expect_decline": true,
+    "expect_citation": false,
+    "expected_source_contains": null,
+    "requires_retrieval": false
+  }
+]
