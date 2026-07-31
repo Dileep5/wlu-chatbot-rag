@@ -26,11 +26,16 @@ RUN pip install --no-cache-dir \
     --extra-index-url https://download.pytorch.org/whl/cpu \
     -r requirements-runtime.txt
 
-# Exactly the live serving import chain - app.py -> retriever.py,
-# conversation.py, domain_guard.py. Verified directly (not assumed):
-# neither memory.py nor intent_classifier.py is imported anywhere in this
-# chain, so neither is copied in.
-COPY src/app.py src/retriever.py src/conversation.py src/domain_guard.py ./src/
+# Exactly the live serving import chain, re-verified by grepping every
+# top-level import in this chain (not assumed from an earlier pass, which
+# is how renderer.py went missing before): app.py -> retriever.py,
+# conversation.py, domain_guard.py, renderer.py, citation.py (Phase 3);
+# retriever.py -> hybrid_rerank.py (Phase 1 hybrid retrieval).
+# hybrid_rerank.py, conversation.py, domain_guard.py, renderer.py, and
+# citation.py have no further local imports of their own. Neither
+# memory.py nor intent_classifier.py is imported anywhere in this chain,
+# so neither is copied in.
+COPY src/app.py src/retriever.py src/hybrid_rerank.py src/conversation.py src/domain_guard.py src/renderer.py src/citation.py ./src/
 
 EXPOSE 8501
 
