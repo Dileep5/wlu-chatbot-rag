@@ -4,7 +4,7 @@ from save_graduate_programs import scrape_programs
 from get_all_course_links import scrape_course_links
 from load_departments import load_departments
 from load_programs import load_programs
-from laod_courses import load_courses
+from load_courses import load_courses
 
 # Current, publicly published undergraduate calendar
 # (verified at https://academic-calendar.wlu.ca/index.php).

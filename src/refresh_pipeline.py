@@ -142,7 +142,7 @@ STEPS = [
     dict(name="grad_load_programs", label="Step 5: Load graduate programs into programs.db",
          script="load_programs.py"),
     dict(name="grad_load_courses", label="Step 5: Load graduate courses into courses.db",
-         script="laod_courses.py"),
+         script="load_courses.py"),
 
     # 5d. Faculty directory (calendar-independent).
     dict(
@@ -152,6 +152,14 @@ STEPS = [
     ),
     dict(name="load_faculty", label="Step 5: Load faculty into faculty.db",
          script="load_faculty.py"),
+
+    # 5e. Policies index (Phase 2) - depends only on clean_pages.csv
+    # (Step 3), same as the rest of Step 5's structured-DB rebuilds.
+    # DROP TABLE IF EXISTS + CREATE TABLE, so safe to re-run every week.
+    dict(name="create_policies_table", label="Step 5: Reset policies schema",
+         script="create_policies_table.py"),
+    dict(name="load_policies", label="Step 5: Load policies index into policies.db",
+         script="load_policies.py"),
 
     # Step 6: Rebuild ChromaDB vector databases.
     dict(name="build_vector_db", label="Step 6: Rebuild content vector DB",
