@@ -1,5 +1,6 @@
 import html
 import re
+import uuid
 
 import streamlit as st
 
@@ -60,77 +61,77 @@ _DEPARTMENT_RESPONSE_TYPES = {
 _CARD_CSS = """
 <style>
 .wlu-card {
-    background: var(--wlu-card-bg, #FFFFFF);
-    border: 1px solid var(--wlu-border, #E3DCEC);
-    border-radius: 16px;
+    background: var(--wlu-card-bg, var(--wlu-paper, #FAF8FC));
+    border: 1px solid var(--wlu-border, #E4DCEF);
+    border-radius: var(--wlu-radius, 16px);
     overflow: hidden;
-    margin: 0.25rem 0 0.5rem;
-    box-shadow: 0 6px 18px rgba(32, 28, 46, 0.08);
-    transition: box-shadow 0.2s ease;
+    margin: var(--wlu-sp-1, 0.5rem) 0;
+    box-shadow: var(--wlu-shadow-rest, 0 4px 14px rgba(26, 21, 38, 0.12));
+    transition: box-shadow var(--wlu-transition, 180ms ease);
 }
 .wlu-card:hover {
-    box-shadow: 0 10px 26px rgba(32, 28, 46, 0.14);
+    box-shadow: var(--wlu-shadow-hover, 0 10px 28px rgba(26, 21, 38, 0.18));
 }
 .wlu-card-header {
     position: relative;
-    background: linear-gradient(135deg, var(--wlu-purple, #330072) 0%, var(--wlu-purple-dark, #220050) 100%);
-    padding: 1rem 1.25rem;
+    background: linear-gradient(135deg, var(--wlu-purple, #522687) 0%, var(--wlu-purple-dark, #3E1C66) 100%);
+    padding: var(--wlu-sp-2, 1rem) var(--wlu-sp-3, 1.5rem);
 }
 .wlu-card-header::after {
     content: '';
     position: absolute;
     left: 0; right: 0; bottom: 0;
     height: 2px;
-    background: linear-gradient(90deg, var(--wlu-gold, #F2A900), rgba(242, 169, 0, 0) 85%);
+    background: linear-gradient(90deg, var(--wlu-gold, #FCC707), rgba(252, 199, 7, 0) 85%);
 }
 .wlu-card-header .wlu-eyebrow {
-    font-size: 0.72rem;
+    font-size: var(--wlu-fs-micro, 0.75rem);
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: var(--wlu-gold, #F2A900);
+    color: var(--wlu-gold, #FCC707);
     font-weight: 700;
     margin-bottom: 0.25rem;
 }
 .wlu-card-header .wlu-card-title {
-    font-family: 'Poppins', 'Inter', sans-serif;
-    font-size: 1.2rem;
+    font-family: var(--wlu-font-head, 'Poppins', 'Inter', sans-serif);
+    font-size: var(--wlu-fs-h2, 1.375rem);
     font-weight: 700;
     color: #FFFFFF;
     line-height: 1.3;
     margin: 0;
 }
 .wlu-card-header .wlu-card-subtitle {
-    font-size: 0.88rem;
-    color: rgba(255, 255, 255, 0.82);
+    font-size: var(--wlu-fs-body-sm, 0.9375rem);
+    color: rgba(255, 255, 255, 0.85);
     margin-top: 0.2rem;
 }
 .wlu-card-body {
-    padding: 1.1rem 1.25rem 0.2rem;
+    padding: var(--wlu-sp-3, 1.5rem) var(--wlu-sp-3, 1.5rem) 0.2rem;
 }
 .wlu-meta-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 0.65rem 1.5rem;
+    gap: var(--wlu-sp-1, 0.5rem) var(--wlu-sp-3, 1.5rem);
 }
 .wlu-meta-item .wlu-meta-label {
-    font-size: 0.7rem;
+    font-size: var(--wlu-fs-micro, 0.75rem);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--wlu-ink-muted, #675F7D);
+    color: var(--wlu-ink-muted, #6B5F7A);
     font-weight: 600;
     margin-bottom: 0.15rem;
 }
 .wlu-meta-item .wlu-meta-value {
-    font-size: 0.92rem;
-    color: var(--wlu-ink, #201C2E);
+    font-size: var(--wlu-fs-body-sm, 0.9375rem);
+    color: var(--wlu-ink, #1A1526);
     font-weight: 500;
     line-height: 1.45;
 }
 .wlu-section {
-    margin-top: 1rem;
-    padding-top: 1rem;
-    padding-bottom: 0.9rem;
-    border-top: 1px solid var(--wlu-border, #E3DCEC);
+    margin-top: var(--wlu-sp-2, 1rem);
+    padding-top: var(--wlu-sp-2, 1rem);
+    padding-bottom: var(--wlu-sp-2, 1rem);
+    border-top: 1px solid var(--wlu-border, #E4DCEF);
 }
 .wlu-card-body > .wlu-section:first-child {
     margin-top: 0;
@@ -138,85 +139,226 @@ _CARD_CSS = """
     border-top: none;
 }
 .wlu-section-title {
-    font-size: 0.76rem;
+    font-size: var(--wlu-fs-micro, 0.75rem);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--wlu-purple, #330072);
+    color: var(--wlu-purple-text, #522687);
     font-weight: 700;
-    margin-bottom: 0.5rem;
+    margin-bottom: var(--wlu-sp-1, 0.5rem);
 }
 .wlu-section p {
-    margin: 0 0 0.6rem;
+    margin: 0 0 var(--wlu-sp-1, 0.5rem);
     line-height: 1.6;
-    color: var(--wlu-ink, #201C2E);
-    font-size: 0.92rem;
+    color: var(--wlu-ink, #1A1526);
+    font-size: var(--wlu-fs-body-sm, 0.9375rem);
 }
 .wlu-section p:last-child {
     margin-bottom: 0;
 }
 .wlu-section.wlu-highlight {
-    background: var(--wlu-purple-soft, #EFEBF4);
-    border: 1px solid var(--wlu-border, #E3DCEC);
-    border-left: 3px solid var(--wlu-gold, #F2A900);
-    border-radius: 10px;
-    padding: 0.85rem 1rem;
+    background: var(--wlu-paper, #FAF8FC);
+    border: 1px solid var(--wlu-border, #E4DCEF);
+    border-left: 3px solid var(--wlu-gold, #FCC707);
+    border-radius: var(--wlu-radius, 16px);
+    padding: var(--wlu-sp-2, 1rem);
 }
 .wlu-schedule-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 0.75rem;
+    gap: var(--wlu-sp-1, 0.5rem);
 }
 .wlu-schedule-item {
-    background: var(--wlu-purple-soft, #EFEBF4);
-    border-radius: 10px;
-    padding: 0.7rem 0.85rem;
+    background: var(--wlu-paper, #FAF8FC);
+    border-radius: var(--wlu-radius, 16px);
+    padding: var(--wlu-sp-1, 0.5rem) var(--wlu-sp-2, 1rem);
 }
 .wlu-schedule-item .wlu-meta-label {
-    color: var(--wlu-purple, #330072);
+    color: var(--wlu-purple-text, #522687);
 }
 .wlu-schedule-item .wlu-meta-value {
     font-weight: 400;
 }
 .wlu-card-footer {
-    background: var(--wlu-purple-soft, #EFEBF4);
-    border-top: 1px solid var(--wlu-border, #E3DCEC);
-    padding: 0.55rem 1.25rem;
-    font-size: 0.78rem;
+    background: var(--wlu-paper, #FAF8FC);
+    border-top: 1px solid var(--wlu-border, #E4DCEF);
+    padding: var(--wlu-sp-1, 0.5rem) var(--wlu-sp-3, 1.5rem);
+    font-size: var(--wlu-fs-caption, 0.8125rem);
 }
 .wlu-card-footer .wlu-source-label,
 .wlu-standalone-source .wlu-source-label {
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-size: 0.68rem;
+    font-size: var(--wlu-fs-micro, 0.75rem);
     font-weight: 700;
-    color: var(--wlu-ink-muted, #675F7D);
+    color: var(--wlu-ink-muted, #6B5F7A);
     margin-right: 0.3rem;
 }
 .wlu-card-footer a,
 .wlu-standalone-source a {
-    color: var(--wlu-purple, #330072);
+    color: var(--wlu-purple-text, #522687);
     font-weight: 600;
     text-decoration: none;
     word-break: break-all;
+    transition: color var(--wlu-transition, 180ms ease);
 }
 .wlu-card-footer a:hover,
 .wlu-standalone-source a:hover {
+    color: var(--wlu-purple-text, #522687);
     text-decoration: underline;
 }
+.wlu-card-footer a:focus-visible,
+.wlu-standalone-source a:focus-visible {
+    outline: none;
+    box-shadow: var(--wlu-focus-ring, 0 0 0 2px #FAF8FC, 0 0 0 4px #FCC707);
+    border-radius: 4px;
+}
 .wlu-standalone-source {
-    font-size: 0.8rem;
-    padding: 0.4rem 0;
+    font-size: var(--wlu-fs-caption, 0.8125rem);
+    padding: var(--wlu-sp-1, 0.5rem) 0;
 }
 .wlu-card-footer a,
 .wlu-standalone-source a {
-    margin-right: 0.4rem;
+    margin-right: var(--wlu-sp-1, 0.5rem);
 }
 .wlu-retrieval-date {
-    color: var(--wlu-ink-muted, #675F7D);
-    font-size: 0.72rem;
+    color: var(--wlu-ink-muted, #6B5F7A);
+    font-size: var(--wlu-fs-micro, 0.75rem);
+}
+.wlu-icon {
+    display: inline-flex;
+    vertical-align: -2px;
+    margin-right: 0.35em;
+}
+.wlu-icon svg {
+    width: 1em;
+    height: 1em;
+}
+
+/* Generic/vector answer card (render_generic()) - the same card shell
+   (background/border/radius/shadow) as .wlu-card above, applied to a
+   st.container(key=...) instead of a raw HTML wrapper - see
+   render_generic()'s own comment for why. The selector matches on a
+   substring rather than a fixed class: the container's key carries a
+   fresh uuid suffix per render (Streamlit requires unique keys within
+   one script run, and the chat-history replay loop can render several
+   of these in a single run), so no single fixed key exists to select. */
+[class*="st-key-wlu-generic-card-"] {
+    background: var(--wlu-card-bg, #FFFFFF);
+    border: 1px solid var(--wlu-border, #E4DCEF);
+    border-radius: var(--wlu-radius, 16px);
+    box-shadow: var(--wlu-shadow-rest, 0 4px 14px rgba(26, 21, 38, 0.12));
+    padding: var(--wlu-sp-3, 1.5rem);
+    margin: var(--wlu-sp-1, 0.5rem) 0;
+    transition: box-shadow var(--wlu-transition, 180ms ease);
+}
+[class*="st-key-wlu-generic-card-"]:hover {
+    box-shadow: var(--wlu-shadow-hover, 0 10px 28px rgba(26, 21, 38, 0.18));
+}
+.wlu-generic-eyebrow {
+    display: flex;
+    align-items: center;
+    font-size: var(--wlu-fs-micro, 0.75rem);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--wlu-purple-text, #522687);
+    font-weight: 700;
+    margin-bottom: var(--wlu-sp-2, 1rem);
+    padding-bottom: var(--wlu-sp-1, 0.5rem);
+    border-bottom: 1px solid var(--wlu-border, #E4DCEF);
+}
+[class*="st-key-wlu-generic-card-"] .wlu-standalone-source {
+    margin-top: var(--wlu-sp-1, 0.5rem);
+    padding-top: var(--wlu-sp-1, 0.5rem);
+    border-top: 1px solid var(--wlu-border, #E4DCEF);
 }
 </style>
 """
+
+
+# Production polish: replaces the emoji this card system originally
+# shipped with (📘/📄/👨‍🏫/📇/🔬/📝/👤/📥/📚/📅/📋/ℹ️/🏛️/🎓) - emoji render
+# as full-color pictures with inconsistent weight/style across
+# platforms, which reads as a mismatched icon language next to the
+# card system's own deliberate, monochrome design. Each icon below is
+# a small inline SVG using currentColor for its stroke/fill, so it
+# always exactly matches whatever text color the surrounding label
+# already has (--wlu-gold in a card eyebrow, --wlu-purple-text in a
+# section title) - including automatically adapting to dark mode,
+# with no separate dark-mode variant needed, unlike a raster image or
+# a data-URI background-image baked to one fixed color. The person and
+# cap shapes deliberately reuse the exact path data from app.py's chat
+# avatar icons, so the same concept (a person; graduation/academic)
+# looks identical everywhere it appears in the app.
+def _icon(name):
+
+    paths = {
+        "document": (
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/>'
+            '<path d="M9 12h6M9 16h6M9 8h3"/></svg>'
+        ),
+        "person": (
+            '<svg viewBox="0 0 24 24" fill="currentColor">'
+            '<circle cx="12" cy="8" r="4"/>'
+            '<path d="M4,21 A8,8 0 0,1 20,21 Z"/></svg>'
+        ),
+        "cap": (
+            '<svg viewBox="0 0 24 24" fill="currentColor">'
+            '<path d="M12,4 L22,9 L12,14 L2,9 Z"/>'
+            '<rect x="8" y="10" width="8" height="5" rx="1" opacity="0.85"/>'
+            '<line x1="19" y1="9" x2="19" y2="16" stroke="currentColor" stroke-width="1.5"/>'
+            '<circle cx="19" cy="16.5" r="1.3"/></svg>'
+        ),
+        "book": (
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>'
+            '<path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>'
+        ),
+        "mail": (
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<rect x="2" y="4" width="20" height="16" rx="2"/>'
+            '<path d="M2 6l10 7 10-7"/></svg>'
+        ),
+        "flask": (
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<path d="M9 3h6M10 3v6l-5.5 9.5A1 1 0 0 0 5.4 20h13.2a1 1 0 0 0 '
+            '.9-1.5L14 9V3"/></svg>'
+        ),
+        "building": (
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<path d="M3 21h18M4 21V9l8-5 8 5v12M9 21v-6h6v6"/></svg>'
+        ),
+        "calendar": (
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<rect x="3" y="4" width="18" height="18" rx="2"/>'
+            '<path d="M16 2v4M8 2v4M3 10h18"/></svg>'
+        ),
+        "info": (
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<circle cx="12" cy="12" r="9"/>'
+            '<path d="M12 11v6M12 7.5v.01"/></svg>'
+        ),
+        "inbox": (
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<path d="M22 12h-6l-2 3h-4l-2-3H2"/>'
+            '<path d="M5.45 5.11 2 12v7a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-7l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>'
+        ),
+        "message": (
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'
+        ),
+    }
+
+    return f'<span class="wlu-icon">{paths[name]}</span>'
 
 
 def _esc(value):
@@ -278,13 +420,17 @@ def _section_html(title, body_html, icon="", highlight=False):
     a custom block like the program schedule grid) in a titled, visually
     separated section. Returns "" - and is safe to include unfiltered in
     a sections list - whenever body_html is empty, so a missing field
-    simply produces no section rather than an empty heading."""
+    simply produces no section rather than an empty heading.
+
+    `icon`, if given, is an _icon() name - resolved to its trusted SVG
+    here rather than accepted as raw text, so a caller can never pass
+    something that needs escaping through this parameter."""
 
     if not body_html:
         return ""
 
     css_class = "wlu-section wlu-highlight" if highlight else "wlu-section"
-    heading = f"{icon} {_esc(title)}".strip() if icon else _esc(title)
+    heading = f"{_icon(icon)}{_esc(title)}" if icon else _esc(title)
 
     return (
         f'<div class="{css_class}">'
@@ -325,22 +471,30 @@ def _card_footer_html(citation):
     )
 
 
-def _card_html(eyebrow, title, subtitle, body_sections, source):
+def _card_html(eyebrow, title, subtitle, body_sections, source, eyebrow_icon=None):
     """Assembles one complete card (header + body sections + footer) as
     a single HTML string, so every card is still exactly one
     st.markdown() call - unchanged from before Phase 18, and required
     for the evaluate.py AppTest harness, which reads only the first
-    markdown element of the last chat message."""
+    markdown element of the last chat message.
+
+    eyebrow_icon: an _icon() name (trusted, static SVG), kept as a
+    separate parameter rather than baked into `eyebrow` itself, since
+    `eyebrow` is always HTML-escaped below (consistent with every
+    other field in this file) and escaping a pre-built <svg> string
+    would mangle it into visible markup instead of rendering the
+    icon."""
 
     subtitle_html = (
         f'<div class="wlu-card-subtitle">{_esc(subtitle)}</div>' if subtitle else ""
     )
+    eyebrow_icon_html = _icon(eyebrow_icon) if eyebrow_icon else ""
 
     return (
         f"{_CARD_CSS}"
         f'<div class="wlu-card">'
         f'<div class="wlu-card-header">'
-        f'<div class="wlu-eyebrow">{_esc(eyebrow)}</div>'
+        f'<div class="wlu-eyebrow">{eyebrow_icon_html}{_esc(eyebrow)}</div>'
         f'<div class="wlu-card-title">{_esc(title)}</div>'
         f"{subtitle_html}"
         f"</div>"
@@ -481,7 +635,7 @@ def _parse_course_fields(answer):
 def _render_course_fallback(answer, source, summary=None):
 
     _render_summary(summary)
-    st.markdown(f"📘 Course\n\n{answer}")
+    st.markdown(f"Course\n\n{answer}")
     _render_source(source)
 
 
@@ -506,12 +660,13 @@ def render_course(answer, source, summary=None):
 
     body_sections = [
         _meta_grid_html(meta_items),
-        _section_html("Description", _text_html(fields.get("Description")), icon="📄"),
+        _section_html("Description", _text_html(fields.get("Description")), icon="document"),
     ]
 
     st.markdown(
         _card_html(
-            eyebrow="📘 Course",
+            eyebrow="Course",
+            eyebrow_icon="book",
             title=f"{fields['Course Code']} · {fields['Course Name']}",
             subtitle=None,
             body_sections=[s for s in body_sections if s],
@@ -593,7 +748,7 @@ def _parse_faculty_fields(answer):
 def _render_faculty_fallback(answer, source, summary=None):
 
     _render_summary(summary)
-    st.markdown(f"👨‍🏫 Faculty\n\n{answer}")
+    st.markdown(f"Faculty\n\n{answer}")
     _render_source(source)
 
 
@@ -622,19 +777,20 @@ def render_faculty(answer, source, summary=None):
 
     body_sections = [
         _meta_grid_html(profile_items),
-        _section_html("Contact", _meta_grid_html(contact_items), icon="📇"),
+        _section_html("Contact", _meta_grid_html(contact_items), icon="mail"),
         _section_html(
             "Research Interests",
             _text_html(fields.get("Research Interests")),
-            icon="🔬",
+            icon="flask",
             highlight=True,
         ),
-        _section_html("Biography", _text_html(fields.get("Biography")), icon="📝"),
+        _section_html("Biography", _text_html(fields.get("Biography")), icon="document"),
     ]
 
     st.markdown(
         _card_html(
-            eyebrow="👨‍🏫 Faculty Profile",
+            eyebrow="Faculty Profile",
+            eyebrow_icon="person",
             title=fields["Name"],
             subtitle=fields.get("Title"),
             body_sections=[s for s in body_sections if s],
@@ -754,7 +910,7 @@ def _parse_program_fields(answer):
 def _render_program_fallback(answer, source, summary=None):
 
     _render_summary(summary)
-    st.markdown(f"🎓 Program\n\n{answer}")
+    st.markdown(f"Program\n\n{answer}")
     _render_source(source)
 
 
@@ -1001,37 +1157,38 @@ def render_program(answer, source, summary=None):
         # that also happens to include coordinator info, leading with it
         # is still a reasonable, consistent position.
         _section_html(
-            "Coordinator", _text_html(fields.get("Coordinator")), icon="👤",
+            "Coordinator", _text_html(fields.get("Coordinator")), icon="person",
         ),
         _section_html(
             "Admission Requirements",
             _text_html(fields.get("Admission Requirements")),
-            icon="📥",
+            icon="inbox",
         ),
-        _section_html("Overview", _text_html(sections["overview"]), icon="📝"),
+        _section_html("Overview", _text_html(sections["overview"]), icon="document"),
         _section_html(
             "Required Courses",
             _text_html(fields.get("Program Requirements")),
-            icon="📚",
+            icon="book",
         ),
-        _section_html("Recommended Schedule", schedule_html, icon="📅"),
+        _section_html("Recommended Schedule", schedule_html, icon="calendar"),
         _section_html(
-            "Program Regulations", _text_html(sections["regulations"]), icon="📋"
+            "Program Regulations", _text_html(sections["regulations"]), icon="document"
         ),
         _section_html(
-            "Additional Information", _text_html(sections["additional"]), icon="ℹ️"
+            "Additional Information", _text_html(sections["additional"]), icon="info"
         ),
     ]
 
     # Production-polish fix: the card is correctly labeled "Department"
     # when this answer came from search_department() rather than
     # search_program() (see _parse_program_fields()'s "Entity Kind"),
-    # instead of always showing "🎓 Program" regardless of source.
+    # instead of always showing "Program" regardless of source.
     is_department = fields.get("Entity Kind") == "Department"
 
     st.markdown(
         _card_html(
-            eyebrow="🏛️ Department" if is_department else "🎓 Program",
+            eyebrow="Department" if is_department else "Program",
+            eyebrow_icon="building" if is_department else "cap",
             title=fields["Program Name"],
             subtitle=None,
             body_sections=[s for s in body_sections if s],
@@ -1096,7 +1253,7 @@ def _parse_department_fields(answer):
 def _render_department_fallback(answer, source, summary=None):
 
     _render_summary(summary)
-    st.markdown(f"🏛️ Department\n\n{answer}")
+    st.markdown(f"Department\n\n{answer}")
     _render_source(source)
 
 
@@ -1117,13 +1274,14 @@ def render_department(answer, source, summary=None):
 
     body_sections = [
         _meta_grid_html(meta_items),
-        _section_html("Programs", _text_html(fields.get("Programs")), icon="📚"),
-        _section_html("Overview", _text_html(fields.get("Description")), icon="📝"),
+        _section_html("Programs", _text_html(fields.get("Programs")), icon="book"),
+        _section_html("Overview", _text_html(fields.get("Description")), icon="document"),
     ]
 
     st.markdown(
         _card_html(
-            eyebrow="🏛️ Department",
+            eyebrow="Department",
+            eyebrow_icon="building",
             title=fields["Department"],
             subtitle=None,
             body_sections=[s for s in body_sections if s],
@@ -1134,10 +1292,43 @@ def render_department(answer, source, summary=None):
 
 
 def render_generic(answer, source, summary=None):
+    """The vector/policy/research answer path - in practice the most
+    common real response type, since it's what a free-text question
+    that doesn't match a structured course/faculty/program/department
+    lookup falls through to. Previously a completely bare st.markdown()
+    call with none of the structured cards' visual treatment; now
+    wrapped in the same card family via a CSS-keyed st.container(),
+    with a minimal eyebrow so it reads as a recognized member of that
+    family rather than an unstyled box.
+
+    Deliberately NOT built as one raw _card_html() string the way the
+    structured cards are: `answer` here is LLM-generated Markdown
+    (**bold**, numbered/bulleted lists) that needs Streamlit's real
+    Markdown-to-HTML pass to render correctly - confirmed live that
+    inline emphasis inside a raw HTML block is NOT processed (stays as
+    literal asterisks) even with unsafe_allow_html=True, unlike the
+    structured cards' body text, which is already-scraped plain prose
+    with no Markdown syntax of its own. st.container(key=...) instead
+    wraps a normal st.markdown(answer) call - full native Markdown
+    rendering - inside a div CSS can style as a card shell. The key
+    must be unique per call within a single script run (Streamlit
+    enforces this) since the chat-history replay loop can render
+    several generic answers in one run; a fresh uuid4 per call
+    guarantees that without needing to thread a stable id down from
+    app.py."""
 
     _render_summary(summary)
-    st.markdown(answer)
-    _render_source(source)
+
+    with st.container(key=f"wlu-generic-card-{uuid.uuid4().hex[:10]}"):
+
+        st.markdown(
+            f"{_CARD_CSS}"
+            f'<div class="wlu-generic-eyebrow">{_icon("message")}Answer</div>',
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(answer)
+        _render_source(source)
 
 
 def _render_followup(followup):

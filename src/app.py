@@ -2,6 +2,7 @@ import os
 import re
 
 import streamlit as st
+import streamlit.components.v1 as components
 from openai import OpenAI
 
 from retriever import (
@@ -44,6 +45,13 @@ OFF_TOPIC_MESSAGE = (
     "I'm not able to help with that topic, but feel free "
     "to ask me anything about WLU!"
 )
+
+# Distinct avatars for the two chat roles - a person icon for the user,
+# the same graduation cap already used on the hero badge for the
+# assistant, so the two are visually distinguishable at a glance rather
+# than relying on background color alone to tell them apart.
+USER_AVATAR = "🧑"
+ASSISTANT_AVATAR = "🎓"
 
 
 # -----------------------------
@@ -701,29 +709,139 @@ CUSTOM_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@600;700&family=Inter:wght@400;500;600&display=swap');
 
 :root {
-    /* Verified against Wilfrid Laurier University's own live site CSS
-       (wlu.ca's production stylesheet) - --wlu-purple and --wlu-gold
-       are WLU's actual brand colors (#330072 is their site-wide link/
-       brand purple; #F2A900 appears in their CSS under a class
-       literally named ".Gold"), not an approximation. --wlu-purple-
-       accent is their real hover/highlight purple (#924DA7 - the
-       "mauve" WLU's own marketing materials pair with purple). The
-       -dark/-soft/border shades are derived tints, not independently
-       verified, since WLU's site doesn't need them for this component
-       system's specific roles (hero gradient depth, card backgrounds). */
-    --wlu-purple: #330072;
-    --wlu-purple-dark: #220050;
-    --wlu-purple-accent: #924DA7;
+    /* ---- Color system --------------------------------------------
+       Dark purple sidebar gradient (unchanged), neutral near-white
+       main canvas (--wlu-paper) - not a purple wash - so the app reads
+       as a chat tool, not a marketing page. --wlu-purple-light is kept
+       only for smaller accents (e.g. the user-message tint mixed with
+       --wlu-purple-soft) - it is no longer a large fill area. Every
+       color used anywhere in this file (and in renderer.py's card
+       CSS, via the same variable names) draws from this single set -
+       no other hex value should appear as a fill for text,
+       backgrounds, or borders outside this block.
+       Contrast verified (WCAG relative-luminance formula): --wlu-ink
+       on --wlu-paper is 16.9:1, --wlu-ink-muted on white/paper is
+       5.9:1 - the vast majority of the app's text now uses this simple
+       pairing instead of juggling contrast against a colored canvas.
+       White text still passes on --wlu-purple (10.6:1) and
+       --wlu-purple-dark (13.4:1) for the hero/sidebar. --wlu-gold
+       passes against those two darker purples (8.5:1) as text, and
+       everywhere as a non-text UI accent (focus rings, thin borders,
+       >=3:1) - but gold text/icons must never sit on white/paper
+       (1.5:1, fails badly) or on --wlu-purple-light (3.5:1, fails for
+       text). */
+    --wlu-purple-dark: #3E1C66;
+    --wlu-purple: #522687;
+    --wlu-purple-light: #8454A0;
+    --wlu-gold: #FCC707;
+    --wlu-ink: #1A1526;
+    --wlu-ink-muted: #6B5F7A;
+    --wlu-paper: #FAF8FC;
+    --wlu-card-bg: #FFFFFF;
     --wlu-purple-soft: #EFEBF4;
-    --wlu-gold: #F2A900;
-    --wlu-ink: #201C2E;
-    --wlu-ink-muted: #675F7D;
-    --wlu-border: #E3DCEC;
+    --wlu-border: #E4DCEF;
     --wlu-online: #1F9D55;
+    /* --wlu-purple-text: a separate token from --wlu-purple, used
+       wherever purple is the TEXT color on a paper/card surface
+       (section titles, "Try asking", card-footer links) rather than a
+       background fill. In light mode this is identical to --wlu-purple
+       (10.6:1 on white - fine as-is); dark mode overrides it to a
+       brighter purple, since --wlu-purple itself only reaches 1.7:1
+       against a near-black surface as text - recomputed, not assumed,
+       see the dark-mode block below. */
+    --wlu-purple-text: var(--wlu-purple);
+
+    /* ---- Typography system -----------------------------------------
+       One header font (Poppins) + one body font (Inter), four
+       deliberate size tiers used everywhere - hero / section-header /
+       body / caption. Nothing outside this scale. */
+    --wlu-font-head: 'Poppins', 'Inter', sans-serif;
+    --wlu-font-body: 'Inter', -apple-system, "Segoe UI", sans-serif;
+    --wlu-fs-hero: 2.25rem;      /* 36px / 700 / hero title only */
+    --wlu-fs-h2: 1.375rem;       /* 22px / 700 / every section header */
+    --wlu-fs-body: 1rem;         /* 16px / 400-500 / primary reading copy */
+    --wlu-fs-body-sm: 0.9375rem; /* 15px / 400-500 / secondary inline copy */
+    --wlu-fs-caption: 0.8125rem; /* 13px / 500 / meta, labels, footers */
+    --wlu-fs-micro: 0.75rem;     /* 12px / 700 / uppercase eyebrow tags */
+
+    /* ---- Spacing system: strict 8px scale --------------------------- */
+    --wlu-sp-1: 0.5rem;   /* 8px */
+    --wlu-sp-2: 1rem;     /* 16px */
+    --wlu-sp-3: 1.5rem;   /* 24px */
+    --wlu-sp-4: 2rem;     /* 32px */
+    --wlu-sp-6: 3rem;     /* 48px */
+
+    /* ---- Shared elevation, radius, and motion tokens ---------------
+       One radius, one shadow pair (rest/hover), one transition timing
+       - applied identically to every card/panel/input in the app.
+       Deliberate exceptions: suggested-question chips stay pill-shaped
+       (a distinct control type, not a card) and circular badges/dots
+       stay circular (icon/indicator shapes, not cards). */
+    --wlu-radius: 16px;
+    --wlu-shadow-rest: 0 4px 14px rgba(26, 21, 38, 0.12);
+    --wlu-shadow-hover: 0 10px 28px rgba(26, 21, 38, 0.18);
+    --wlu-transition: 180ms ease;
+    /* A thin (2px) branded ring, not a thick amber one that reads as a
+       validation error. Solid --wlu-purple carries the actual contrast
+       (10.6:1 on white/paper - passes on its own); the gold layer
+       outside it is a low-opacity flourish only, never load-bearing
+       for visibility, since gold alone fails contrast against white/
+       paper (1.5:1). */
+    --wlu-focus-ring: 0 0 0 2px var(--wlu-purple), 0 0 0 4px rgba(252, 199, 7, 0.25);
 }
 
 html, body, [class*="css"] {
-    font-family: 'Inter', -apple-system, "Segoe UI", sans-serif;
+    font-family: var(--wlu-font-body);
+    font-size: var(--wlu-fs-body);
+    line-height: 1.55;
+    color: var(--wlu-ink);
+}
+
+/* Custom list styling, injected once here rather than per-card in
+   renderer.py's _CARD_CSS, so it applies globally to every markdown-
+   rendered list in the app - structured-card body text and generic/
+   vector answers alike - as one consistent system, not two. Overrides
+   the default black serif numbers / hollow-circle browser bullets
+   with on-brand markers via ::marker (color/content, not a background-
+   image or extra markup - no DOM structure change, so this never
+   touches what _extract_labeled_field() parses). */
+ul, ol {
+    padding-left: 1.3em;
+    margin: var(--wlu-sp-1) 0;
+}
+ul li, ol li {
+    margin-bottom: var(--wlu-sp-1);
+    line-height: 1.6;
+}
+ul li:last-child, ol li:last-child {
+    margin-bottom: 0;
+}
+ul > li::marker {
+    content: "●  ";
+    color: var(--wlu-purple-text);
+    font-size: 0.7em;
+}
+ol > li::marker {
+    color: var(--wlu-purple-text);
+    font-weight: 700;
+}
+/* Sub-lists (nested one level in) - indented further, a lighter
+   secondary marker and muted color instead of the browser default
+   hollow-circle, so nesting reads as "less important," not just
+   "further right." */
+ul ul, ol ul, ul ol, ol ol {
+    padding-left: 1.2em;
+    margin: 0.35em 0;
+}
+ul ul > li::marker {
+    content: "–  ";
+    color: var(--wlu-ink-muted);
+    font-size: 0.85em;
+}
+ol ul > li::marker {
+    content: "–  ";
+    color: var(--wlu-ink-muted);
+    font-size: 0.85em;
 }
 
 @keyframes wluFadeUp {
@@ -731,17 +849,39 @@ html, body, [class*="css"] {
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* Single large maple-leaf silhouette (an original shape, not WLU's
-   registered wordmark/logo), cropped into the corner as one bold
-   watermark - matching the scale and placement WLU uses on its own
-   branded background templates, rather than a tiled repeating print. */
+@keyframes wluPulse {
+    0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); }
+    40% { opacity: 1; transform: scale(1); }
+}
+
+/* Typing indicator - three pulsing dots shown in the assistant's own
+   avatar/bubble styling (not a bare Streamlit spinner), so a response
+   that's still generating still looks like part of the same card
+   system rather than a generic loading state. */
+.wlu-typing {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0.3rem 0;
+}
+.wlu-typing span {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--wlu-purple);
+    animation: wluPulse 1.2s ease-in-out infinite;
+}
+.wlu-typing span:nth-child(2) { animation-delay: 0.15s; }
+.wlu-typing span:nth-child(3) { animation-delay: 0.3s; }
+
+/* Main canvas: flat, neutral near-white (--wlu-paper) - a chat surface,
+   not a colored marketing panel. The prior large ambiguous watermark
+   shape (it read as an unclear triangle/blob rather than a
+   recognizable leaf) is removed rather than patched; the one leaf
+   accent in the app now lives small and unambiguous in the sidebar
+   brand mark instead. */
 .stApp {
-    background-color: var(--wlu-purple-soft);
-    background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='100'%20height='115'%20viewBox='0%200%20100%20115'%3E%3Cg%20fill='%23330072'%20opacity='0.1'%3E%3Cpath%20d='M-12,0%20C-12,-22%20-5,-33%200,-40%20C5,-33%2012,-22%2012,0%20C7,5%20-7,5%20-12,0%20Z'%20transform='translate(50,58)%20scale(1.15)'/%3E%3Cpath%20d='M-12,0%20C-12,-22%20-5,-33%200,-40%20C5,-33%2012,-22%2012,0%20C7,5%20-7,5%20-12,0%20Z'%20transform='translate(50,58)%20rotate(48)%20scale(0.92)'/%3E%3Cpath%20d='M-12,0%20C-12,-22%20-5,-33%200,-40%20C5,-33%2012,-22%2012,0%20C7,5%20-7,5%20-12,0%20Z'%20transform='translate(50,58)%20rotate(-48)%20scale(0.92)'/%3E%3Cpath%20d='M-12,0%20C-12,-22%20-5,-33%200,-40%20C5,-33%2012,-22%2012,0%20C7,5%20-7,5%20-12,0%20Z'%20transform='translate(50,58)%20rotate(102)%20scale(0.68)'/%3E%3Cpath%20d='M-12,0%20C-12,-22%20-5,-33%200,-40%20C5,-33%2012,-22%2012,0%20C7,5%20-7,5%20-12,0%20Z'%20transform='translate(50,58)%20rotate(-102)%20scale(0.68)'/%3E%3Cpath%20d='M45,62%20L55,62%20L51,108%20L49,108%20Z'/%3E%3C/g%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: 120% -160px;
-    background-size: 1350px auto;
-    background-attachment: fixed;
+    background-color: var(--wlu-paper);
 }
 
 header[data-testid="stHeader"] {
@@ -753,7 +893,7 @@ header[data-testid="stHeader"]::after {
     position: absolute;
     left: 0; right: 0; bottom: 0;
     height: 3px;
-    background: linear-gradient(90deg, var(--wlu-purple) 0%, var(--wlu-gold) 50%, var(--wlu-purple-accent) 100%);
+    background: linear-gradient(90deg, var(--wlu-purple-dark) 0%, var(--wlu-gold) 50%, var(--wlu-purple) 100%);
 }
 
 /* Slim brand scrollbar, all scroll containers */
@@ -765,30 +905,44 @@ header[data-testid="stHeader"]::after {
     background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-    background: rgba(146, 77, 167, 0.45);
+    background: rgba(62, 28, 102, 0.35);
     border-radius: 10px;
 }
 ::-webkit-scrollbar-thumb:hover {
-    background: var(--wlu-purple);
+    background: var(--wlu-purple-dark);
 }
 
 .block-container {
-    padding-top: 2rem;
-    max-width: 880px;
+    padding-top: var(--wlu-sp-4);
+    max-width: 760px;
+}
+
+/* The chat input lives in a separate fixed-position container
+   (Streamlit's own "bottom block"), not inside .block-container, so it
+   has its own default max-width/centering that doesn't automatically
+   match the column above it - overridden here so the input stays
+   visually aligned with the hero/cards/messages rather than sitting
+   wider or off-center from them. */
+div[data-testid="stBottomBlockContainer"] {
+    max-width: 760px !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
 }
 
 h1, h2, h3, h4 {
-    font-family: 'Poppins', 'Inter', sans-serif;
+    font-family: var(--wlu-font-head);
+    font-weight: 700;
+    line-height: 1.25;
     letter-spacing: -0.01em;
 }
 .block-container h4 {
-    color: var(--wlu-purple-dark);
-    font-size: 1.05rem;
-    margin: 0.25rem 0 0.9rem;
+    color: var(--wlu-purple-text);
+    font-size: var(--wlu-fs-h2);
+    margin: var(--wlu-sp-1) 0 var(--wlu-sp-2);
 }
 .block-container hr {
     border-color: var(--wlu-border);
-    margin: 1.75rem 0;
+    margin: var(--wlu-sp-3) 0;
 }
 
 /* Hero */
@@ -796,10 +950,10 @@ h1, h2, h3, h4 {
     position: relative;
     overflow: hidden;
     background: linear-gradient(135deg, var(--wlu-purple) 0%, var(--wlu-purple-dark) 100%);
-    border-radius: 20px;
-    padding: 2.5rem 2.5rem;
-    margin-bottom: 1.5rem;
-    box-shadow: 0 18px 40px rgba(51, 0, 114, 0.32), 0 2px 8px rgba(51, 0, 114, 0.18);
+    border-radius: var(--wlu-radius);
+    padding: var(--wlu-sp-6);
+    margin-bottom: var(--wlu-sp-3);
+    box-shadow: var(--wlu-shadow-hover);
     animation: wluFadeUp 0.5s ease both;
 }
 .wlu-hero::before {
@@ -809,80 +963,78 @@ h1, h2, h3, h4 {
     right: -70px;
     width: 240px;
     height: 240px;
-    background: radial-gradient(circle, rgba(242, 169, 0, 0.32) 0%, rgba(242, 169, 0, 0) 70%);
-    pointer-events: none;
-}
-.wlu-hero::after {
-    content: '';
-    position: absolute;
-    right: -70px;
-    bottom: -110px;
-    width: 320px;
-    height: 368px;
-    background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='100'%20height='115'%20viewBox='0%200%20100%20115'%3E%3Cg%20fill='%23FFFFFF'%20opacity='0.07'%3E%3Cpath%20d='M-12,0%20C-12,-22%20-5,-33%200,-40%20C5,-33%2012,-22%2012,0%20C7,5%20-7,5%20-12,0%20Z'%20transform='translate(50,58)%20scale(1.15)'/%3E%3Cpath%20d='M-12,0%20C-12,-22%20-5,-33%200,-40%20C5,-33%2012,-22%2012,0%20C7,5%20-7,5%20-12,0%20Z'%20transform='translate(50,58)%20rotate(48)%20scale(0.92)'/%3E%3Cpath%20d='M-12,0%20C-12,-22%20-5,-33%200,-40%20C5,-33%2012,-22%2012,0%20C7,5%20-7,5%20-12,0%20Z'%20transform='translate(50,58)%20rotate(-48)%20scale(0.92)'/%3E%3Cpath%20d='M-12,0%20C-12,-22%20-5,-33%200,-40%20C5,-33%2012,-22%2012,0%20C7,5%20-7,5%20-12,0%20Z'%20transform='translate(50,58)%20rotate(102)%20scale(0.68)'/%3E%3Cpath%20d='M-12,0%20C-12,-22%20-5,-33%200,-40%20C5,-33%2012,-22%2012,0%20C7,5%20-7,5%20-12,0%20Z'%20transform='translate(50,58)%20rotate(-102)%20scale(0.68)'/%3E%3Cpath%20d='M45,62%20L55,62%20L51,108%20L49,108%20Z'/%3E%3C/g%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-size: contain;
+    background: radial-gradient(circle, rgba(252, 199, 7, 0.28) 0%, rgba(252, 199, 7, 0) 70%);
     pointer-events: none;
 }
 .wlu-hero-badge {
     position: absolute;
-    top: 1.6rem;
-    right: 1.75rem;
-    width: 52px;
-    height: 52px;
+    top: var(--wlu-sp-4);
+    right: var(--wlu-sp-4);
+    width: 48px;
+    height: 48px;
     border-radius: 50%;
+    overflow: hidden;
     background: rgba(255, 255, 255, 0.08);
     border: 2px solid var(--wlu-gold);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.5rem;
-    box-shadow: 0 0 0 4px rgba(242, 169, 0, 0.14), 0 4px 14px rgba(0, 0, 0, 0.28);
+    font-size: 1.2rem;
+    line-height: 1;
+    box-shadow: 0 0 0 4px rgba(252, 199, 7, 0.14), 0 4px 14px rgba(0, 0, 0, 0.28);
 }
 .wlu-hero h1 {
     position: relative;
-    font-size: 2.15rem;
+    font-size: var(--wlu-fs-hero);
     font-weight: 700;
+    line-height: 1.2;
     color: #FFFFFF;
-    margin: 0 4.5rem 0.4rem 0;
+    margin: 0 5.5rem var(--wlu-sp-1) 0;
     text-shadow: 0 2px 14px rgba(0, 0, 0, 0.25);
 }
 .wlu-hero .wlu-tagline {
     position: relative;
-    font-size: 1.05rem;
+    font-size: var(--wlu-fs-body);
     font-weight: 600;
     color: var(--wlu-gold);
-    margin: 0 0 0.7rem;
+    margin: 0 0 var(--wlu-sp-2);
 }
 .wlu-hero .wlu-desc {
     position: relative;
-    font-size: 0.94rem;
+    font-size: var(--wlu-fs-body-sm);
     line-height: 1.6;
-    color: rgba(255, 255, 255, 0.86);
+    color: rgba(255, 255, 255, 0.9);
     max-width: 62ch;
     margin: 0;
 }
 
 /* Welcome card */
 .wlu-welcome {
-    background: #FFFFFF;
+    background: var(--wlu-card-bg);
     border: 1px solid var(--wlu-border);
     border-left: 4px solid var(--wlu-gold);
-    border-radius: 14px;
-    padding: 1.1rem 1.35rem;
-    margin-bottom: 1.5rem;
-    box-shadow: 0 6px 20px rgba(51, 0, 114, 0.08);
+    border-radius: var(--wlu-radius);
+    padding: var(--wlu-sp-3);
+    /* Small on its own (--wlu-sp-1) rather than a full section gap
+       (--wlu-sp-3) - the divider immediately following this card
+       already carries its own --wlu-sp-3 top margin
+       (.block-container hr below), and the two were compounding into
+       a gap that read as accidental dead space rather than one
+       considered --wlu-sp-4 (32px) section break. */
+    margin-bottom: var(--wlu-sp-1);
+    box-shadow: var(--wlu-shadow-rest);
     animation: wluFadeUp 0.55s ease 0.08s both;
 }
 .wlu-welcome .wlu-welcome-title {
+    font-family: var(--wlu-font-head);
     font-weight: 700;
-    color: var(--wlu-purple-dark);
-    font-size: 0.98rem;
+    color: var(--wlu-purple-text);
+    font-size: var(--wlu-fs-h2);
 }
 .wlu-welcome p {
-    margin: 0.4rem 0 0;
+    margin: var(--wlu-sp-1) 0 0;
     color: var(--wlu-ink-muted);
-    font-size: 0.92rem;
+    font-size: var(--wlu-fs-body);
     line-height: 1.6;
 }
 
@@ -894,29 +1046,35 @@ h1, h2, h3, h4 {
    separately below since Streamlit's default text color assumes a
    light sidebar. */
 section[data-testid="stSidebar"] {
-    background-image: linear-gradient(165deg, var(--wlu-purple-dark) 0%, var(--wlu-purple) 55%, var(--wlu-purple-accent) 140%);
+    background-image: linear-gradient(165deg, var(--wlu-purple-dark) 0%, var(--wlu-purple) 100%);
 }
 section[data-testid="stSidebar"] h3 {
+    font-family: var(--wlu-font-head) !important;
     color: #FFFFFF !important;
-    font-size: 0.95rem !important;
+    font-size: var(--wlu-fs-h2) !important;
+    font-weight: 700 !important;
+    margin-top: var(--wlu-sp-1) !important;
 }
 section[data-testid="stSidebar"] p,
 section[data-testid="stSidebar"] li,
 section[data-testid="stSidebar"] .stMarkdown {
-    color: rgba(255, 255, 255, 0.82);
+    font-size: var(--wlu-fs-body);
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.85);
 }
 section[data-testid="stSidebar"] hr {
     border-color: rgba(255, 255, 255, 0.18);
+    margin: var(--wlu-sp-3) 0;
 }
 section[data-testid="stSidebar"] ul {
     list-style: none;
     padding-left: 0;
-    margin: 0.5rem 0 0;
+    margin: var(--wlu-sp-1) 0 0;
 }
 section[data-testid="stSidebar"] li {
     position: relative;
-    padding-left: 1.15rem;
-    margin-bottom: 0.4rem;
+    padding-left: var(--wlu-sp-3);
+    margin-bottom: var(--wlu-sp-1);
 }
 section[data-testid="stSidebar"] li::before {
     content: '';
@@ -929,22 +1087,42 @@ section[data-testid="stSidebar"] li::before {
     background: var(--wlu-gold);
 }
 
+/* New Conversation button - solid gold so it reads as the sidebar's one
+   primary action, clearly distinct from the white suggested-question
+   chips in the main canvas. Purple-dark text/icon on gold: 8.5:1,
+   passes easily (the pairing already verified safe in the color-system
+   comment above). */
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button {
+    background: var(--wlu-gold) !important;
+    color: var(--wlu-purple-dark) !important;
+    border: none !important;
+    font-weight: 700 !important;
+    margin-bottom: var(--wlu-sp-2) !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button:hover {
+    background: #E6B406 !important;
+    color: var(--wlu-purple-dark) !important;
+    border: none !important;
+    transform: translateY(-1px);
+}
+
 /* Brand lockup - a horizontal wordmark + leaf-mark treatment in the
    spirit of WLU's own "LAURIER [leaf]" logo lockup, but original
    typography and an original leaf shape, not a reproduction of their
    registered logo asset. */
 .wlu-brand {
     text-align: left;
-    padding: 0.5rem 0 1.6rem;
+    padding: var(--wlu-sp-1) 0 var(--wlu-sp-3);
     animation: wluFadeUp 0.45s ease both;
 }
 .wlu-brand-row {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: var(--wlu-sp-1);
 }
 .wlu-brand-word {
-    font-family: 'Poppins', sans-serif;
+    font-family: var(--wlu-font-head);
     font-weight: 700;
     font-size: 1.65rem;
     letter-spacing: 0.01em;
@@ -952,30 +1130,29 @@ section[data-testid="stSidebar"] li::before {
     line-height: 1;
 }
 .wlu-brand-mark {
-    width: 34px;
-    height: 38px;
+    font-size: 1.6rem;
+    line-height: 1;
     flex-shrink: 0;
-    fill: var(--wlu-gold);
-    filter: drop-shadow(0 0 6px rgba(242, 169, 0, 0.5));
+    filter: drop-shadow(0 0 6px rgba(252, 199, 7, 0.35));
 }
 .wlu-brand-tagline {
-    font-family: 'Inter', sans-serif;
+    font-family: var(--wlu-font-body);
     font-weight: 600;
-    font-size: 0.62rem;
+    font-size: var(--wlu-fs-micro);
     letter-spacing: 0.18em;
     text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.7);
-    margin-top: 0.5rem;
+    color: rgba(255, 255, 255, 0.75);
+    margin-top: var(--wlu-sp-1);
 }
 .wlu-status-card {
     position: relative;
     overflow: hidden;
-    background: #FFFFFF;
+    background: var(--wlu-card-bg);
     border: 1px solid var(--wlu-border);
-    border-radius: 12px;
-    padding: 1rem 1rem 0.85rem;
-    margin-bottom: 1rem;
-    box-shadow: 0 10px 26px rgba(20, 0, 46, 0.3);
+    border-radius: var(--wlu-radius);
+    padding: var(--wlu-sp-2) var(--wlu-sp-2) var(--wlu-sp-1);
+    margin-bottom: var(--wlu-sp-2);
+    box-shadow: var(--wlu-shadow-hover);
     animation: wluFadeUp 0.5s ease 0.05s both;
 }
 .wlu-status-card::before {
@@ -983,14 +1160,14 @@ section[data-testid="stSidebar"] li::before {
     position: absolute;
     top: 0; left: 0; right: 0;
     height: 3px;
-    background: linear-gradient(90deg, var(--wlu-purple), var(--wlu-gold), var(--wlu-purple-accent));
+    background: linear-gradient(90deg, var(--wlu-purple-dark), var(--wlu-purple));
 }
 .wlu-status-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0.32rem 0;
-    font-size: 0.85rem;
+    padding: 0.4rem 0;
+    font-size: var(--wlu-fs-caption);
 }
 .wlu-status-row + .wlu-status-row {
     border-top: 1px solid var(--wlu-border);
@@ -999,6 +1176,7 @@ section[data-testid="stSidebar"] li::before {
     color: var(--wlu-ink-muted);
     display: flex;
     align-items: center;
+    font-weight: 500;
 }
 .wlu-status-row .wlu-value {
     font-weight: 600;
@@ -1010,78 +1188,303 @@ section[data-testid="stSidebar"] li::before {
     height: 8px;
     border-radius: 50%;
     background: var(--wlu-online);
-    margin-right: 7px;
+    margin-right: var(--wlu-sp-1);
     box-shadow: 0 0 0 3px rgba(31, 157, 85, 0.15);
 }
 .wlu-version {
     text-align: center;
-    font-size: 0.76rem;
-    color: rgba(255, 255, 255, 0.55);
-    margin-top: 1.25rem;
-    padding-top: 0.85rem;
+    font-size: var(--wlu-fs-micro);
+    color: rgba(255, 255, 255, 0.6);
+    margin-top: var(--wlu-sp-3);
+    padding-top: var(--wlu-sp-2);
     border-top: 1px solid rgba(255, 255, 255, 0.18);
 }
 
-/* Chat bubbles */
+/* Chat bubbles. Streamlit's chat message markup does NOT expose a
+   role-specific data-testid on the message or its avatar (confirmed by
+   inspecting the live DOM - stChatMessageAvatarUser/Assistant don't
+   exist in this Streamlit version, so the two rules that used to
+   target them were dead selectors that never matched anything). The
+   one reliable, stable role signal is the inner content's own
+   aria-label ("Chat message from user"/"...from assistant"), used
+   here via :has() to target the outer bubble.
+
+   Each bubble is a compact, role-aligned block rather than a full-
+   width row: user messages are right-aligned and capped at 70% of the
+   column (compact, since questions are short); assistant messages are
+   left-aligned and allowed more width (answers are longer). */
 div[data-testid="stChatMessage"] {
+    background: var(--wlu-paper);
     border: 1px solid var(--wlu-border);
-    border-radius: 16px;
-    box-shadow: 0 2px 10px rgba(32, 28, 46, 0.05);
-    transition: box-shadow 0.2s ease;
+    border-radius: var(--wlu-radius);
+    box-shadow: var(--wlu-shadow-rest);
+    transition: box-shadow var(--wlu-transition);
+    animation: wluFadeUp var(--wlu-transition) both;
+    width: fit-content;
+    max-width: 88%;
+}
+div[data-testid="stChatMessage"]:has([aria-label="Chat message from user"]) {
+    background: var(--wlu-purple-soft);
+    flex-direction: row-reverse;
+    margin-left: auto;
+    margin-right: 0;
+    max-width: 70%;
+}
+div[data-testid="stChatMessage"]:has([aria-label="Chat message from assistant"]) {
+    margin-right: auto;
+    margin-left: 0;
 }
 div[data-testid="stChatMessage"]:hover {
-    box-shadow: 0 8px 22px rgba(32, 28, 46, 0.1);
+    box-shadow: var(--wlu-shadow-hover);
 }
-div[data-testid="stChatMessageAvatarUser"] {
-    background: linear-gradient(135deg, var(--wlu-purple-accent), var(--wlu-purple)) !important;
+
+/* Avatars - a small circular badge with a custom geometric glyph
+   (person silhouette / graduation cap), not stock emoji. Streamlit
+   still receives an emoji via avatar= (a value it requires), but its
+   native glyph is hidden here (font-size: 0) and replaced with the
+   glyph below via ::before - the avatar div's own box is a fixed
+   32x32px flex-centered square regardless of its text content, so
+   hiding the glyph text doesn't collapse it. */
+div[data-testid="stChatMessage"] > div:first-child {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    font-size: 0;
+    position: relative;
+    box-shadow: 0 2px 6px rgba(26, 21, 38, 0.18);
+    /* The message row top-aligns the avatar with the text block - a
+       fixed-height avatar starting at the same y as a shorter first
+       text line makes the avatar's own center sit measurably lower
+       than the first line's center (confirmed live: 5.6px at this
+       avatar's old 36px size, against the body text's 24.8px line-
+       height - 16px font-size * the global 1.55 line-height). Nudging
+       the avatar up by half the height difference between it and one
+       text line re-centers it against that first line specifically,
+       not the whole (possibly multi-line) message block. A fixed
+       px value, not em/rem, deliberately: this rule's own
+       font-size: 0 above would make 1em resolve to 0 here, not the
+       body's actual size. */
+    margin-top: calc((24.8px - 40px) / 2);
 }
-div[data-testid="stChatMessageAvatarAssistant"] {
-    background: linear-gradient(135deg, var(--wlu-gold), #D68F00) !important;
+div[data-testid="stChatMessage"] > div:first-child::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+div[data-testid="stChatMessage"]:has([aria-label="Chat message from user"]) > div:first-child {
+    background: linear-gradient(135deg, var(--wlu-purple-light), var(--wlu-purple));
+    /* The shared -7.6px margin-top above (calibrated against the
+       assistant bubble, which it now centers exactly, confirmed live)
+       left the user avatar 3.79px too high - the row-reverse layout
+       used for user bubbles measurably affects the text block's own
+       vertical offset versus the assistant's normal row direction, so
+       the two need slightly different corrections to both land on
+       their own first line's center. */
+    margin-top: -1.9px;
+}
+div[data-testid="stChatMessage"]:has([aria-label="Chat message from user"]) > div:first-child::before {
+    background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Ccircle%20cx='12'%20cy='8'%20r='4'%20fill='white'/%3E%3Cpath%20d='M4,20%20A8,8%200%200,1%2020,20%20Z'%20fill='white'/%3E%3C/svg%3E");
+    background-size: 20px 20px;
+}
+div[data-testid="stChatMessage"]:has([aria-label="Chat message from assistant"]) > div:first-child {
+    background: linear-gradient(135deg, var(--wlu-gold), #D68F00);
+}
+div[data-testid="stChatMessage"]:has([aria-label="Chat message from assistant"]) > div:first-child::before {
+    background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20d='M12,4%20L22,9%20L12,14%20L2,9%20Z'%20fill='%233E1C66'/%3E%3Crect%20x='8'%20y='10'%20width='8'%20height='5'%20rx='1'%20fill='%233E1C66'%20opacity='0.85'/%3E%3Cline%20x1='19'%20y1='9'%20x2='19'%20y2='16'%20stroke='%233E1C66'%20stroke-width='1.5'/%3E%3Ccircle%20cx='19'%20cy='16.5'%20r='1.3'%20fill='%233E1C66'/%3E%3C/svg%3E");
+    background-size: 22px 22px;
 }
 
 /* Chat input */
 div[data-testid="stChatInput"] {
-    border-radius: 18px;
+    background: var(--wlu-paper) !important;
+    border-radius: var(--wlu-radius) !important;
     border: 1px solid var(--wlu-border) !important;
-    box-shadow: 0 4px 16px rgba(51, 0, 114, 0.08);
-    transition: box-shadow 0.2s ease, border-color 0.2s ease;
+    box-shadow: var(--wlu-shadow-rest);
+    transition: box-shadow var(--wlu-transition), border-color var(--wlu-transition);
 }
 div[data-testid="stChatInput"]:focus-within {
     border-color: var(--wlu-purple) !important;
-    box-shadow: 0 8px 22px rgba(51, 0, 114, 0.16), 0 0 0 3px rgba(242, 169, 0, 0.18);
+    box-shadow: var(--wlu-focus-ring);
+}
+/* The wrapper's box-shadow above is the intended ring. Streamlit's own
+   BaseWeb textarea internals apply their own default red focus/
+   validation border several levels deep inside this wrapper -
+   unrelated to this app's palette - which would otherwise show through
+   as a second, off-brand ring alongside the intended one. */
+div[data-testid="stChatInput"] div {
+    border-color: transparent !important;
 }
 button[data-testid="stChatInputSubmitButton"]:not(:disabled) {
     background: var(--wlu-purple) !important;
     color: #FFFFFF !important;
+    transition: background var(--wlu-transition);
 }
 button[data-testid="stChatInputSubmitButton"]:not(:disabled):hover {
     background: var(--wlu-purple-dark) !important;
 }
+button[data-testid="stChatInputSubmitButton"]:focus-visible {
+    outline: none;
+    box-shadow: var(--wlu-focus-ring);
+}
 
 /* Suggested-question buttons */
 .stButton > button {
-    border-radius: 999px !important;
+    border-radius: var(--wlu-radius) !important;
     border: 1px solid var(--wlu-border) !important;
-    background: #FFFFFF !important;
-    font-size: 0.86rem !important;
+    background: var(--wlu-card-bg) !important;
+    font-family: var(--wlu-font-body) !important;
+    font-size: var(--wlu-fs-body-sm) !important;
     font-weight: 500 !important;
     color: var(--wlu-ink) !important;
-    padding: 0.6rem 1.1rem !important;
-    box-shadow: 0 1px 3px rgba(32, 28, 46, 0.06) !important;
-    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, color 0.15s ease, background 0.15s ease !important;
+    padding: 0.65rem var(--wlu-sp-2) !important;
+    box-shadow: var(--wlu-shadow-rest) !important;
+    transition: transform var(--wlu-transition), box-shadow var(--wlu-transition), border-color var(--wlu-transition), color var(--wlu-transition), background var(--wlu-transition) !important;
     animation: wluFadeUp 0.4s ease both;
 }
 .stButton > button:hover {
     border-color: var(--wlu-purple) !important;
-    color: var(--wlu-purple) !important;
-    background: var(--wlu-purple-soft) !important;
+    color: var(--wlu-purple-text) !important;
+    background: var(--wlu-paper) !important;
     transform: translateY(-2px);
-    box-shadow: 0 10px 22px rgba(51, 0, 114, 0.18) !important;
+    box-shadow: var(--wlu-shadow-hover) !important;
 }
 .stButton > button:active {
     transform: translateY(0);
 }
+.stButton > button:focus-visible {
+    outline: none;
+    box-shadow: var(--wlu-focus-ring) !important;
+}
+
+/* Universal focus-visible fallback: any other native interactive
+   element (links, etc.) gets the same ring, same timing, rather than
+   the browser default outline on some elements and nothing on others. */
+a:focus-visible {
+    outline: none;
+    box-shadow: var(--wlu-focus-ring);
+    border-radius: 4px;
+}
+
+/* Follow-up suggestion caption (app.py's FOLLOWUP_SUGGESTIONS, rendered
+   via st.caption() immediately after a response card) - visually
+   attached as a footer row of the card above it, rather than a stray
+   floating line, by styling the caption's own container to continue
+   the card's border/background and pulling it flush against the
+   card's bottom edge. Targets the *next* stElementContainer sibling of
+   whichever one holds a .wlu-card - a structural relationship, not a
+   change to renderer.py's own markup. */
+div[data-testid="stElementContainer"]:has(.wlu-card)
+  + div[data-testid="stElementContainer"]:has([data-testid="stCaptionContainer"]) {
+    margin-top: calc(-1 * var(--wlu-sp-1));
+}
+div[data-testid="stElementContainer"]:has(.wlu-card)
+  + div[data-testid="stElementContainer"] [data-testid="stCaptionContainer"] {
+    background: var(--wlu-paper);
+    border: 1px solid var(--wlu-border);
+    border-top: none;
+    border-radius: 0 0 var(--wlu-radius) var(--wlu-radius);
+    padding: var(--wlu-sp-1) var(--wlu-sp-3);
+    box-shadow: var(--wlu-shadow-rest);
+}
+div[data-testid="stElementContainer"]:has(.wlu-card)
+  + div[data-testid="stElementContainer"] [data-testid="stCaptionContainer"] p {
+    margin: 0;
+    color: var(--wlu-ink-muted);
+    font-size: var(--wlu-fs-caption);
+}
 </style>
+"""
+
+
+# Dark-mode token overrides, hooked into Streamlit's own native theme
+# toggle (the hamburger menu, top right) rather than building a
+# separate one.
+#
+# st.get_option("theme.base") was tried first and confirmed NOT to work
+# for this: toggling the menu's Light/Dark choice doesn't trigger a
+# script rerun at all (Streamlit repaints its own built-in widgets
+# purely client-side by rewriting its own stylesheet rules in place),
+# and even forcing a rerun afterward (verified live, via clicking
+# another button) still returned the original startup value - this
+# option only reflects the config-level theme, never a live in-app
+# override, in this Streamlit version.
+#
+# What DOES change live is genuinely observable: document.body's own
+# computed background-color, which Streamlit rewrites in place -
+# confirmed live at rgb(14, 17, 23) on dark, rgb(255, 255, 255)-ish on
+# light. THEME_DETECTOR_JS (below) reads that color's luminance from
+# inside a components.v1.html() iframe (same-origin as the main app,
+# so window.parent.document is reachable) and sets a data-theme
+# attribute on the top-level <html> element accordingly, polling
+# briefly since Streamlit's rewrite isn't exposed as an observable
+# attribute/class change. This is the "data-theme approach" this task
+# explicitly allows as the fallback when st.get_option doesn't pan
+# out - CSS below keys off :root[data-theme="dark"], which targets the
+# same <html> element the script sets the attribute on.
+#
+# Only tokens that actually need different values for a dark surface
+# are overridden - --wlu-purple/--wlu-purple-dark/--wlu-purple-light/
+# --wlu-gold are unchanged, since the hero and sidebar already use them
+# as background fills with white text (unaffected by overall theme),
+# and --wlu-gold already passes as text against a near-black surface
+# (11.6:1) with no brightening needed.
+#
+# Contrast recomputed for these dark pairings specifically (WCAG
+# relative-luminance formula), not assumed from the light-mode numbers:
+#   --wlu-ink (F1EEF5) on --wlu-paper (17131F): 15.9:1
+#   --wlu-ink-muted (B6ACC4) on --wlu-paper: 8.4:1
+#   --wlu-ink on --wlu-card-bg (211B2E): 14.9:1
+#   --wlu-gold on --wlu-paper: 11.6:1
+#   --wlu-purple-text (B08FD4, replaces --wlu-purple wherever purple is
+#     used as TEXT rather than a background - the unchanged --wlu-purple
+#     itself is only 1.7:1 as text on a dark surface, well under
+#     threshold) on --wlu-paper: 6.7:1
+#   --wlu-purple-text on --wlu-purple-soft (the dark-mode user-bubble
+#     tint, 2D2440): 5.4:1
+DARK_MODE_CSS = """
+<style>
+:root[data-theme="dark"] {
+    --wlu-paper: #17131F;
+    --wlu-card-bg: #211B2E;
+    --wlu-ink: #F1EEF5;
+    --wlu-ink-muted: #B6ACC4;
+    --wlu-border: #3D3450;
+    --wlu-purple-soft: #2D2440;
+    --wlu-purple-text: #B08FD4;
+}
+</style>
+"""
+
+THEME_DETECTOR_JS = """
+<script>
+(function() {
+    function applyTheme() {
+        try {
+            var doc = window.parent.document;
+            var bg = getComputedStyle(doc.body).backgroundColor;
+            var m = bg.match(/[\\d.]+/g);
+            if (!m) return;
+            var luminance = 0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2];
+            var isDark = luminance < 128;
+            var current = doc.documentElement.getAttribute('data-theme');
+            var target = isDark ? 'dark' : 'light';
+            if (current !== target) {
+                doc.documentElement.setAttribute('data-theme', target);
+            }
+        } catch (e) {}
+    }
+    applyTheme();
+    // Streamlit rewrites its own stylesheet rule in place on a theme
+    // toggle (not an attribute/class change on body), so there's
+    // nothing to attach a MutationObserver to directly - a short poll
+    // is the reliable option, and cheap enough for a single boolean
+    // color check every 600ms.
+    setInterval(applyTheme, 600);
+})();
+</script>
 """
 
 
@@ -1099,6 +1502,17 @@ st.markdown(
     CUSTOM_CSS,
     unsafe_allow_html=True
 )
+
+# Always injected (unlike a plain :root block, this one only takes
+# effect once data-theme="dark" is actually set below) - see the
+# comment above DARK_MODE_CSS for why this couldn't be a simple
+# st.get_option() conditional.
+st.markdown(
+    DARK_MODE_CSS,
+    unsafe_allow_html=True
+)
+
+components.html(THEME_DETECTOR_JS, height=0)
 
 st.markdown(
     """
@@ -1146,20 +1560,24 @@ with st.sidebar:
         <div class="wlu-brand">
             <div class="wlu-brand-row">
                 <span class="wlu-brand-word">WLU</span>
-                <svg class="wlu-brand-mark" viewBox="0 0 100 115" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M-12,0 C-12,-22 -5,-33 0,-40 C5,-33 12,-22 12,0 C7,5 -7,5 -12,0 Z" transform="translate(50,58) scale(1.15)" />
-                    <path d="M-12,0 C-12,-22 -5,-33 0,-40 C5,-33 12,-22 12,0 C7,5 -7,5 -12,0 Z" transform="translate(50,58) rotate(48) scale(0.92)" />
-                    <path d="M-12,0 C-12,-22 -5,-33 0,-40 C5,-33 12,-22 12,0 C7,5 -7,5 -12,0 Z" transform="translate(50,58) rotate(-48) scale(0.92)" />
-                    <path d="M-12,0 C-12,-22 -5,-33 0,-40 C5,-33 12,-22 12,0 C7,5 -7,5 -12,0 Z" transform="translate(50,58) rotate(102) scale(0.68)" />
-                    <path d="M-12,0 C-12,-22 -5,-33 0,-40 C5,-33 12,-22 12,0 C7,5 -7,5 -12,0 Z" transform="translate(50,58) rotate(-102) scale(0.68)" />
-                    <path d="M45,62 L55,62 L51,108 L49,108 Z" />
-                </svg>
+                <span class="wlu-brand-mark">🍁</span>
             </div>
             <div class="wlu-brand-tagline">Hybrid RAG Assistant</div>
         </div>
         """,
         unsafe_allow_html=True
     )
+
+    if st.button(
+        "＋ New Conversation",
+        key="new_conversation_button",
+        use_container_width=True
+    ):
+        st.session_state.messages = []
+        st.session_state.chat_history = []
+        st.session_state.memory = create_memory()
+        st.session_state.pending_query = None
+        st.rerun()
 
     st.markdown(
         """
@@ -1269,7 +1687,8 @@ if show_suggestions:
 for msg in st.session_state.messages:
 
     with st.chat_message(
-        msg["role"]
+        msg["role"],
+        avatar=USER_AVATAR if msg["role"] == "user" else ASSISTANT_AVATAR
     ):
 
         render_response(
@@ -1321,11 +1740,29 @@ if query:
     )
 
     with st.chat_message(
-        "user"
+        "user",
+        avatar=USER_AVATAR
     ):
         st.markdown(
             query
         )
+
+    # A card-styled typing indicator (three pulsing dots, not a bare
+    # Streamlit spinner) shown in its own placeholder while retrieval/
+    # generation runs below - st.empty() lets it be cleared in place
+    # once the real response is ready, in both the success and error
+    # paths, rather than lingering or stacking with the real message.
+    loading_placeholder = st.empty()
+
+    with loading_placeholder.container():
+        with st.chat_message(
+            "assistant",
+            avatar=ASSISTANT_AVATAR
+        ):
+            st.markdown(
+                '<div class="wlu-typing"><span></span><span></span><span></span></div>',
+                unsafe_allow_html=True
+            )
 
     try:
 
@@ -1479,8 +1916,11 @@ if query:
         # ever needs to be looked up once per turn.
         followup = FOLLOWUP_SUGGESTIONS.get(response_type) if response_type else None
 
+        loading_placeholder.empty()
+
         with st.chat_message(
-            "assistant"
+            "assistant",
+            avatar=ASSISTANT_AVATAR
         ):
 
             render_response(
@@ -1531,8 +1971,11 @@ if query:
             }
         )
 
+        loading_placeholder.empty()
+
         with st.chat_message(
-            "assistant"
+            "assistant",
+            avatar=ASSISTANT_AVATAR
         ):
             st.error(
                 error_msg
