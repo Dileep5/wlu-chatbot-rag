@@ -61,20 +61,33 @@ _CARD_CSS = """
 <style>
 .wlu-card {
     background: var(--wlu-card-bg, #FFFFFF);
-    border: 1px solid var(--wlu-border, #E4DFF0);
-    border-radius: 14px;
+    border: 1px solid var(--wlu-border, #E3DCEC);
+    border-radius: 16px;
     overflow: hidden;
     margin: 0.25rem 0 0.5rem;
+    box-shadow: 0 6px 18px rgba(32, 28, 46, 0.08);
+    transition: box-shadow 0.2s ease;
+}
+.wlu-card:hover {
+    box-shadow: 0 10px 26px rgba(32, 28, 46, 0.14);
 }
 .wlu-card-header {
-    background: linear-gradient(135deg, var(--wlu-purple, #4B2E83) 0%, var(--wlu-purple-dark, #34215C) 100%);
+    position: relative;
+    background: linear-gradient(135deg, var(--wlu-purple, #330072) 0%, var(--wlu-purple-dark, #220050) 100%);
     padding: 1rem 1.25rem;
+}
+.wlu-card-header::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--wlu-gold, #F2A900), rgba(242, 169, 0, 0) 85%);
 }
 .wlu-card-header .wlu-eyebrow {
     font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: var(--wlu-gold, #C9A227);
+    color: var(--wlu-gold, #F2A900);
     font-weight: 700;
     margin-bottom: 0.25rem;
 }
@@ -117,7 +130,7 @@ _CARD_CSS = """
     margin-top: 1rem;
     padding-top: 1rem;
     padding-bottom: 0.9rem;
-    border-top: 1px solid var(--wlu-border, #E4DFF0);
+    border-top: 1px solid var(--wlu-border, #E3DCEC);
 }
 .wlu-card-body > .wlu-section:first-child {
     margin-top: 0;
@@ -128,7 +141,7 @@ _CARD_CSS = """
     font-size: 0.76rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--wlu-purple, #4B2E83);
+    color: var(--wlu-purple, #330072);
     font-weight: 700;
     margin-bottom: 0.5rem;
 }
@@ -142,9 +155,9 @@ _CARD_CSS = """
     margin-bottom: 0;
 }
 .wlu-section.wlu-highlight {
-    background: var(--wlu-purple-soft, #F2EEFA);
-    border: 1px solid var(--wlu-border, #E4DFF0);
-    border-left: 3px solid var(--wlu-gold, #C9A227);
+    background: var(--wlu-purple-soft, #EFEBF4);
+    border: 1px solid var(--wlu-border, #E3DCEC);
+    border-left: 3px solid var(--wlu-gold, #F2A900);
     border-radius: 10px;
     padding: 0.85rem 1rem;
 }
@@ -154,19 +167,19 @@ _CARD_CSS = """
     gap: 0.75rem;
 }
 .wlu-schedule-item {
-    background: var(--wlu-purple-soft, #F2EEFA);
+    background: var(--wlu-purple-soft, #EFEBF4);
     border-radius: 10px;
     padding: 0.7rem 0.85rem;
 }
 .wlu-schedule-item .wlu-meta-label {
-    color: var(--wlu-purple, #4B2E83);
+    color: var(--wlu-purple, #330072);
 }
 .wlu-schedule-item .wlu-meta-value {
     font-weight: 400;
 }
 .wlu-card-footer {
-    background: var(--wlu-purple-soft, #F2EEFA);
-    border-top: 1px solid var(--wlu-border, #E4DFF0);
+    background: var(--wlu-purple-soft, #EFEBF4);
+    border-top: 1px solid var(--wlu-border, #E3DCEC);
     padding: 0.55rem 1.25rem;
     font-size: 0.78rem;
 }
@@ -181,7 +194,7 @@ _CARD_CSS = """
 }
 .wlu-card-footer a,
 .wlu-standalone-source a {
-    color: var(--wlu-purple, #4B2E83);
+    color: var(--wlu-purple, #330072);
     font-weight: 600;
     text-decoration: none;
     word-break: break-all;
@@ -350,6 +363,22 @@ def _render_source(citation):
         )
 
 
+def _render_summary(summary):
+    """The natural-language lead-in app.py's generate_grounded_summary()
+    produces for course/faculty_profile/program/department_profile
+    answers, shown as a plain paragraph ABOVE the card - deliberately a
+    separate st.markdown() call on its own, never concatenated into the
+    `answer` string the four render_X() functions below parse for their
+    actual labeled fields, so it can never be mistaken for card content
+    by _extract_labeled_field(). A no-op (renders nothing) whenever
+    summary is falsy - every other response_type, and any card whose
+    summary generation failed or was skipped, looks exactly as it did
+    before this feature existed."""
+
+    if summary:
+        st.markdown(summary)
+
+
 # Phase 13C: known labels the underlying context text can contain
 # (search_course()'s own f-string in retriever.py, plus the Sprint 10D
 # metadata section) - used as lookahead boundaries so a field's value
@@ -396,14 +425,25 @@ _COURSE_CARD_FIELDS = [
 
 
 def _extract_labeled_field(label, text, label_alternation):
-    """Captures a label's value up to whichever known label comes next
+    r"""Captures a label's value up to whichever known label comes next
     (or end of string) - shared by course and faculty parsing, since both
     answer shapes are the same pattern: a fixed set of "Label: value"
     lines, some of which (Description/Biography) continue over multiple
-    lines rather than ending at the first newline."""
+    lines rather than ending at the first newline.
+
+    The whitespace immediately after "Label:" is matched with [ \t]*,
+    not \s* - deliberately same-line-only. \s* would also consume the
+    newline that follows an EMPTY value (e.g. "Phone: \nOffice: ..."),
+    and the lookahead below requires that exact newline to recognize
+    the next label as a boundary; with it already consumed, the capture
+    would instead swallow the entire next "Label: value" pair looking
+    for a later boundary (confirmed live: an empty "Phone:" absorbed
+    the following "Office: ..." whole). [ \t]* stops at the newline
+    every time, so an empty value is always captured as empty and never
+    absorbs whatever comes after it."""
 
     pattern = (
-        rf"{re.escape(label)}:\s*(.*?)"
+        rf"{re.escape(label)}:[ \t]*(.*?)"
         rf"(?=\n\s*(?:{label_alternation}):|\Z)"
     )
 
@@ -438,19 +478,22 @@ def _parse_course_fields(answer):
     return fields
 
 
-def _render_course_fallback(answer, source):
+def _render_course_fallback(answer, source, summary=None):
 
+    _render_summary(summary)
     st.markdown(f"📘 Course\n\n{answer}")
     _render_source(source)
 
 
-def render_course(answer, source):
+def render_course(answer, source, summary=None):
 
     fields = _parse_course_fields(answer)
 
     if not fields:
-        _render_course_fallback(answer, source)
+        _render_course_fallback(answer, source, summary)
         return
+
+    _render_summary(summary)
 
     meta_items = [
         ("Credits", fields.get("Credits")),
@@ -547,19 +590,22 @@ def _parse_faculty_fields(answer):
     return fields
 
 
-def _render_faculty_fallback(answer, source):
+def _render_faculty_fallback(answer, source, summary=None):
 
+    _render_summary(summary)
     st.markdown(f"👨‍🏫 Faculty\n\n{answer}")
     _render_source(source)
 
 
-def render_faculty(answer, source):
+def render_faculty(answer, source, summary=None):
 
     fields = _parse_faculty_fields(answer)
 
     if not fields:
-        _render_faculty_fallback(answer, source)
+        _render_faculty_fallback(answer, source, summary)
         return
+
+    _render_summary(summary)
 
     profile_items = [
         ("Faculty", fields.get("Faculty")),
@@ -705,8 +751,9 @@ def _parse_program_fields(answer):
     return fields
 
 
-def _render_program_fallback(answer, source):
+def _render_program_fallback(answer, source, summary=None):
 
+    _render_summary(summary)
     st.markdown(f"🎓 Program\n\n{answer}")
     _render_source(source)
 
@@ -910,19 +957,21 @@ def _split_program_description(description):
     }
 
 
-def render_program(answer, source):
+def render_program(answer, source, summary=None):
 
     fields = _parse_program_fields(answer)
 
     if not fields:
-        _render_program_fallback(answer, source)
+        _render_program_fallback(answer, source, summary)
         return
 
     try:
         sections = _split_program_description(fields.get("Description"))
     except Exception:
-        _render_program_fallback(answer, source)
+        _render_program_fallback(answer, source, summary)
         return
+
+    _render_summary(summary)
 
     meta_items = [
         ("Level", fields.get("Level")),
@@ -1044,19 +1093,22 @@ def _parse_department_fields(answer):
     return fields
 
 
-def _render_department_fallback(answer, source):
+def _render_department_fallback(answer, source, summary=None):
 
+    _render_summary(summary)
     st.markdown(f"🏛️ Department\n\n{answer}")
     _render_source(source)
 
 
-def render_department(answer, source):
+def render_department(answer, source, summary=None):
 
     fields = _parse_department_fields(answer)
 
     if not fields:
-        _render_department_fallback(answer, source)
+        _render_department_fallback(answer, source, summary)
         return
+
+    _render_summary(summary)
 
     meta_items = [
         ("Faculty", fields.get("Faculty")),
@@ -1081,25 +1133,45 @@ def render_department(answer, source):
     )
 
 
-def render_generic(answer, source):
+def render_generic(answer, source, summary=None):
 
+    _render_summary(summary)
     st.markdown(answer)
     _render_source(source)
 
 
-def render_response(response_type, answer, source):
+def _render_followup(followup):
+    """The short, templated "Want to know X?" hint line FOLLOWUP_
+    SUGGESTIONS (app.py) maps certain response_types to - rendered as
+    plain small text via st.caption(), not a button, per the task's
+    "keep it simple text for now" instruction. A no-op whenever
+    followup is falsy, exactly like _render_summary() above, so every
+    response_type without a mapped suggestion (or an older stored
+    message from before this feature existed) renders unchanged.
+    Deliberately rendered once here, after every render_X() branch
+    below, rather than threaded into each of them individually - it
+    always belongs at the very end of a response regardless of which
+    card/fallback shape was used above it."""
+
+    if followup:
+        st.caption(followup)
+
+
+def render_response(response_type, answer, source, summary=None, followup=None):
 
     if response_type in _COURSE_RESPONSE_TYPES:
-        render_course(answer, source)
+        render_course(answer, source, summary)
 
     elif response_type in _FACULTY_RESPONSE_TYPES:
-        render_faculty(answer, source)
+        render_faculty(answer, source, summary)
 
     elif response_type in _PROGRAM_RESPONSE_TYPES:
-        render_program(answer, source)
+        render_program(answer, source, summary)
 
     elif response_type in _DEPARTMENT_RESPONSE_TYPES:
-        render_department(answer, source)
+        render_department(answer, source, summary)
 
     else:
-        render_generic(answer, source)
+        render_generic(answer, source, summary)
+
+    _render_followup(followup)
