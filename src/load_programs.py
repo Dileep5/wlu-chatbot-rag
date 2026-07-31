@@ -14,6 +14,39 @@ HEADERS = {
 
 _COURSE_CODE_PATTERN = re.compile(r"\b[A-Z]{2,4}\d{3}[A-Z]?\b")
 
+# Every program page ends with the same site-wide footer ("Top /
+# Academic & Related Dates .../ Contact WLU / (c) ... Wilfrid Laurier
+# University / 75 University Avenue West... / Phone: ... | Fax: ...").
+# Course descriptions never pick this up because they're extracted via a
+# structurally-bounded single <p> tag (see load_courses.py) that can't
+# reach content outside it; program description/admission/requirements
+# text below is instead a blind character-offset slice of the whole
+# flattened page text with no such natural boundary, so it runs straight
+# through into this footer whenever the real content is shorter than the
+# slice window - confirmed live in both the Master of Applied Computing
+# (program_requirements) and Honours BA Philosophy (description) cards.
+# This is the exact same marker text renderer.py's own
+# _TRAILING_BOILERPLATE_PATTERN already recognizes for this artifact
+# downstream (there, only to relocate it into an "Additional Information"
+# catch-all rather than removing it) - stripped here at the source
+# instead, so every consumer of programs.db gets clean text, not just
+# the one card renderer that happened to special-case it.
+_FOOTER_BOILERPLATE_PATTERN = re.compile(
+    r"Academic\s*&\s*Related\s*Dates", re.IGNORECASE
+)
+
+
+def _strip_trailing_footer(text):
+
+    match = _FOOTER_BOILERPLATE_PATTERN.search(text)
+
+    if not match:
+        return text
+
+    # The page's own "Top" link text immediately precedes this marker -
+    # trimmed too so it doesn't linger as a stray trailing word.
+    return re.sub(r"\bTop\s*$", "", text[:match.start()]).rstrip()
+
 
 def _extract_required_course_refs(program_soup):
 
@@ -199,9 +232,9 @@ def load_programs(programs_csv, level):
                 idx = page_text.find(program_name)
 
                 if idx != -1:
-                    description = page_text[
-                        idx:idx + 2000
-                    ]
+                    description = _strip_trailing_footer(
+                        page_text[idx:idx + 2000]
+                    )
 
                 # ----------------------------------
                 # Admission Requirements
@@ -226,7 +259,7 @@ def load_programs(programs_csv, level):
                     if end == -1:
                         end = start + 5000
 
-                    admission = page_text[start:end]
+                    admission = _strip_trailing_footer(page_text[start:end])
 
 
                 # ----------------------------------
@@ -244,9 +277,9 @@ def load_programs(programs_csv, level):
                         first + 1
                     )
 
-                    requirements = page_text[
-                        start:start + 8000
-                    ]
+                    requirements = _strip_trailing_footer(
+                        page_text[start:start + 8000]
+                    )
 
                 # ----------------------------------
                 # Save
@@ -720,7 +753,9 @@ def load_undergraduate_programs(
                 idx = page_text.find(program_name)
 
                 if idx != -1:
-                    description = page_text[idx:idx + 2000]
+                    description = _strip_trailing_footer(
+                        page_text[idx:idx + 2000]
+                    )
 
                 # Admission requirements: same heuristic as graduate,
                 # for consistency and in case some programs do have
@@ -741,7 +776,7 @@ def load_undergraduate_programs(
                     if end == -1:
                         end = start + 5000
 
-                    admission = page_text[start:end]
+                    admission = _strip_trailing_footer(page_text[start:end])
 
                 program_type = _classify_program_type(program_name)
 

@@ -483,6 +483,7 @@ def search_course(question, memory=None):
         notes_text
     FROM courses
     WHERE course_code=?
+    ORDER BY CAST(substr(source_url, instr(source_url, 'y=') + 2) AS INTEGER) DESC
     """, (course_code,))
 
     result = cursor.fetchone()
@@ -896,7 +897,20 @@ def _all_program_names():
     return names
 
 
-def _match_program_name(text):
+def _match_program_name(text, allow_dataless=False):
+    """allow_dataless: when the single most specific matching real
+    program has no program_course_requirements rows, return its name
+    anyway instead of None - only safe for callers that go on to report
+    "no structured data available for <name>" (a correct, honest answer
+    once <name> is verified as the right program). Left False for every
+    other caller, which instead needs "no match" itself to mean "I'm not
+    confident which program this is" - e.g. _handle_program_requires_
+    course()'s yes/no relationship check falls back to showing the
+    plain course card when no program matches, which double-checks a
+    program/course RELATIONSHIP claim, not just a program's identity,
+    and a fixed regression test (see Sprint 11C/12C's "Undergraduate
+    exclusion: no fabricated requirement claim" check) has a permanent
+    wording expectation tied to that specific fallback."""
 
     text_lower = text.lower()
 
@@ -943,16 +957,55 @@ def _match_program_name(text):
     # strong, unambiguous academic-context signal on its own, so
     # "Biology required courses" resolves without needing a second
     # qualifier the way a bare "Tell me about Biology" would.
-    for name in sorted(names, key=len, reverse=True):
+    #
+    # Restricted to the LONGEST matching subject among ALL real programs
+    # (_all_program_names()), not just the ones with requirement data -
+    # mirroring search_program()'s own Phase 13F longest-subject-first
+    # fix, applied here for the same reason. Without this, a shorter,
+    # more generic subject that DOES have requirement rows ("science")
+    # can win purely because a longer, more specific subject ("data
+    # science") belongs to a program with none - confirmed live: "What
+    # courses are required for the Data Science minor?" incorrectly
+    # returned Honours BSc Science's requirement list, since "Honours
+    # BSc Data Science" (having zero program_course_requirements rows)
+    # was never even a Tier 2 candidate under the old names-only loop,
+    # leaving "science" free to match as an unopposed substring. Once
+    # the single most specific matching subject is identified across
+    # every real program, a requirement-data-having candidate at that
+    # exact specificity is preferred if one exists; otherwise (only for
+    # allow_dataless=True callers) the most specific real program name
+    # is still returned - not a shorter, unrelated one - so the
+    # caller's own "no structured data available for X" fallback names
+    # the CORRECT program instead of silently substituting a different
+    # one.
+    best_subject_length = 0
+    best_candidates = []
+
+    for name in sorted(_all_program_names(), key=len, reverse=True):
 
         subject = _strip_to_subject(name.lower())
 
-        if (
+        if not (
             len(subject) >= 3
             and subject in text_lower
             and not _subject_match_degree_conflicts(name, text_lower)
         ):
+            continue
+
+        if len(subject) > best_subject_length:
+            best_subject_length = len(subject)
+            best_candidates = [name]
+
+        elif len(subject) == best_subject_length:
+            best_candidates.append(name)
+
+    for name in best_candidates:
+
+        if name in names:
             return name
+
+    if allow_dataless and best_candidates:
+        return best_candidates[0]
 
     return None
 
@@ -1093,7 +1146,13 @@ def _handle_program_requires_course(program_phrase, course_phrase, memory=None):
 
 def _handle_program_required_courses(program_phrase, memory=None):
 
-    program_name = _match_program_name(program_phrase)
+    # allow_dataless=True: this handler's own "no structured required-
+    # course data is available for X" fallback below is exactly the
+    # honest, correct response once X is verified as the right program -
+    # unlike _handle_program_requires_course()'s yes/no relationship
+    # check, there's no separate claim here that could be wrong if the
+    # program has no data of its own.
+    program_name = _match_program_name(program_phrase, allow_dataless=True)
 
     if not program_name:
         return None
@@ -1462,11 +1521,21 @@ def search_faculty_courses_taught(question, memory=None):
 
     display_rows = [(name, title) for name, title, source_url in rows]
 
+    # Confirmed live: this branch always returned None here despite
+    # `rows` already carrying each instructor's own real profile
+    # source_url from the query above - a genuine missing-citation bug,
+    # not a hallucination (the underlying faculty_courses_taught/faculty
+    # data itself is correct and grounded). citation.py's
+    # build_citation() already accepts an iterable of URLs, so every
+    # instructor's profile is cited, matching how every other correct
+    # structured answer in this app shows a source.
+    faculty_source_urls = [source_url for name, title, source_url in rows]
+
     return (
         _format_faculty_list_context(
             "Faculty who have taught this course", label, display_rows
         ),
-        None
+        faculty_source_urls
     )
 
 
@@ -2123,7 +2192,7 @@ def _detect_fact_intent(question_lower, valid_facts):
     return None
 
 
-def _fact_context(entity_label, entity_name, fact_label, fact_value):
+def _fact_context(entity_label, entity_name, fact_label, fact_value, contact_email=None):
     """The shared, minimal context every fact-lookup branch returns:
     just the entity's identifying name and the single requested fact -
     never the entity's full description/biography/requirements.
@@ -2131,14 +2200,94 @@ def _fact_context(entity_label, entity_name, fact_label, fact_value):
     Coordinator", "Department Coordinator") so the graceful-fallback
     text it produces ("Program Coordinator information is not
     available.") matches the exact wording every existing caller/test
-    already relies on."""
+    already relies on.
 
-    value_text = (
-        fact_value.strip() if fact_value and fact_value.strip()
-        else f"{fact_label} information is not available."
-    )
+    `contact_email` (production polish): when the requested fact itself
+    is missing, but the caller already found a REAL, already-scraped
+    @wlu.ca contact address relevant to this exact entity (never
+    invented - see _extract_contact_email() below, which only ever
+    returns an address that was literally present in already-retrieved
+    WLU text), it's appended as a concrete next step instead of leaving
+    the decline as a dead end. Ignored whenever fact_value is actually
+    present, so an answered fact is never followed by an unrelated
+    contact suggestion."""
+
+    if fact_value and fact_value.strip():
+        value_text = fact_value.strip()
+    else:
+        value_text = f"{fact_label} information is not available."
+        if contact_email:
+            value_text += f" For the most current information, contact {contact_email}."
 
     return f"{entity_label}: {entity_name}\n{fact_label}: {value_text}"
+
+
+# Production polish: graceful declines point to a specific, already-
+# scraped WLU contact address instead of a generic "consult official
+# WLU resources" whenever one genuinely exists for the entity in
+# question - never a fabricated/guessed address. Scoped deliberately
+# narrow: only the three fact-lookup sites below (program/department
+# coordinator, faculty phone/office) call this, since those are the
+# only places a specific entity has already been matched AND its own
+# already-retrieved text is right there to search - a blind "not
+# found" (no course/program/faculty ever matched at all) or the vector
+# search's low-confidence gate have no specific entity to draw a
+# contact from, so they're deliberately left untouched, generic exactly
+# as before.
+_CONTACT_EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9._%+-]+@wlu\.ca", re.IGNORECASE)
+
+
+def _extract_contact_email(*texts):
+    """The first @wlu.ca address literally present in any of `texts`
+    (already-retrieved description/admission/coordinator/programs text
+    for the SAME entity the user asked about), or None. Never
+    constructs or guesses an address - only surfaces one that was
+    already scraped verbatim, so a missing fact still never risks
+    citing a contact that doesn't actually appear anywhere in the WLU
+    data."""
+
+    for text in texts:
+
+        if not text:
+            continue
+
+        match = _CONTACT_EMAIL_PATTERN.search(text)
+
+        if match:
+            return match.group()
+
+    return None
+
+
+def _get_department_contact_email(program_source_url):
+    """Same d=<id> join _get_department_coordinator() uses to find a
+    program's owning department row, but scans that department's own
+    description/programs/coordinator text for a contact address instead
+    of its coordinator name specifically - a reasonable fallback when
+    the program's OWN text has no email of its own, since the joined
+    department page frequently carries a general advising/office
+    contact even when no specific coordinator is named."""
+
+    department_id = _extract_department_id(program_source_url)
+
+    if not department_id:
+        return None
+
+    conn = sqlite3.connect("data/departments.db")
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT coordinator, description, programs, source_url FROM departments")
+
+    rows = cursor.fetchall()
+
+    conn.close()
+
+    for coordinator, description, programs, dept_source_url in rows:
+
+        if _extract_department_id(dept_source_url) == department_id:
+            return _extract_contact_email(coordinator, description, programs)
+
+    return None
 
 
 # Signals the user wants the program's *coordinator* specifically, not
@@ -2447,7 +2596,13 @@ def search_faculty_by_department(question, memory=None):
 
     display_rows = [(name, title) for name, title, source_url in rows]
 
-    return matched_segment, display_rows
+    # Same missing-citation bug course_instructors had (search_faculty_
+    # courses_taught()) - source_url is already fetched above for every
+    # row, just never carried back to the caller, which returned None as
+    # the citation source regardless.
+    source_urls = [source_url for name, title, source_url in rows]
+
+    return matched_segment, display_rows, source_urls
 
 
 # Faculty-level names ("Faculty of Science", "Faculty of Arts",
@@ -2557,7 +2712,13 @@ def search_faculty_by_faculty_name(question, memory=None):
 
     display_rows = [(name, title) for name, title, source_url in rows]
 
-    return matched_segment, display_rows
+    # Same missing-citation bug course_instructors had (search_faculty_
+    # courses_taught()) - source_url is already fetched above for every
+    # row, just never carried back to the caller, which returned None as
+    # the citation source regardless.
+    source_urls = [source_url for name, title, source_url in rows]
+
+    return matched_segment, display_rows, source_urls
 
 
 # Maximum Levenshtein (insert/delete/substitute) distance for a question
@@ -2709,6 +2870,16 @@ _NAME_QUERY_FILLER_WORDS = _DEPARTMENT_LIST_FILLER_WORDS | {
     # reproduced false positive that made search_faculty wrongly resolve
     # before ordinal resolution ever got a chance to run.
     "first", "second", "third", "fourth", "fifth", "last", "one",
+    # "more" is common conversational-followup vocabulary (see
+    # FOLLOWUP_PHRASES: "more", "more details", "tell me more") with no
+    # person-identifying signal of its own, but at edit-distance 1 from
+    # the real surname "Moore" - a reproduced false positive: "Tell me
+    # more about them" reduced to the single residual word "more" (every
+    # other word already filtered), which fuzzy-matched an unrelated
+    # faculty member (James Moore) and let search_faculty() resolve the
+    # RAW query before resolve_contextual_reference() ever got a chance
+    # to correctly resolve "them" against entity_history.
+    "more",
 }
 
 # At most a first+last name's worth of actual content - short enough
@@ -2757,7 +2928,23 @@ def _fuzzy_candidate_words(question, question_lower):
     else:
         candidates = []
 
-    return [word for word in candidates if len(word) >= _MIN_NAME_TOKEN_LENGTH]
+    candidates = [word for word in candidates if len(word) >= _MIN_NAME_TOKEN_LENGTH]
+
+    # A candidate word immediately glued to digits in the original text
+    # (no space in between - "GHOST101", "CP312") is an attempted
+    # course-code-shaped token, never a person's name: real names are
+    # never written glued directly to a number. Without this, a fake/
+    # nonexistent course code's letter-prefix can still fuzzy-match a
+    # real surname at edit-distance 1 (confirmed live: "Who's the
+    # instructor for GHOST101?" fuzzy-matched "Ghose") and produce a
+    # confident, wrong faculty profile instead of the graceful decline
+    # this typo-tolerance path is supposed to reserve for genuine name
+    # typos. Applied after both branches above, so it covers either one
+    # uniformly regardless of which produced the candidate.
+    return [
+        word for word in candidates
+        if not re.search(rf"{re.escape(word)}\d", question_lower)
+    ]
 
 
 def _collect_fuzzy_name_matches(rows, question, question_lower):
@@ -2773,6 +2960,17 @@ def _collect_fuzzy_name_matches(rows, question, question_lower):
     if not question_words:
         return []
 
+    # A single stray word (e.g. "France" in "What is the capital of
+    # France?") can fuzzy-match some faculty member's name purely by
+    # chance and bypass the domain gate with a false positive.
+    # Whenever there's more than one candidate word to check, require
+    # at least 2 of them to independently match name tokens of the SAME
+    # row - a coincidental one-word collision is no longer enough on
+    # its own. A lone candidate word (the documented single-name-typo
+    # case, e.g. "ranawera") still only needs to match once, since
+    # there's nothing else in the question to corroborate it with.
+    required_matches = 1 if len(question_words) == 1 else 2
+
     matches = []
 
     for row in rows:
@@ -2784,16 +2982,21 @@ def _collect_fuzzy_name_matches(rows, question, question_lower):
             if name_parts and len(token) >= _MIN_NAME_TOKEN_LENGTH
         } if name_parts else set()
 
-        for name_token in name_tokens:
+        if not name_tokens:
+            continue
 
+        matched_word_count = sum(
+            1 for word in question_words
             if any(
                 Levenshtein.distance(
                     name_token, word, score_cutoff=_MAX_NAME_TYPO_DISTANCE
                 ) <= _MAX_NAME_TYPO_DISTANCE
-                for word in question_words
-            ):
-                matches.append(row)
-                break
+                for name_token in name_tokens
+            )
+        )
+
+        if matched_word_count >= required_matches:
+            matches.append(row)
 
     return matches
 
@@ -3011,7 +3214,13 @@ def search_faculty_by_research_topic(question, memory=None):
 
     display_rows = [(name, title) for url, name, title in rows]
 
-    return topic, display_rows
+    # Same missing-citation bug course_instructors had (search_faculty_
+    # courses_taught()) - url is already fetched above for every row,
+    # just never carried back to the caller, which returned None as the
+    # citation source regardless.
+    source_urls = [url for url, name, title in rows]
+
+    return topic, display_rows, source_urls
 
 
 # --- Retrieval quality: metadata-aware reranking ---
@@ -3651,8 +3860,19 @@ def structured_search(question, memory=None):
 
             coordinator = _get_department_coordinator(result[3])
 
+            contact_email = None
+
+            if not coordinator:
+
+                description = result["description"] if "description" in result.keys() else None
+
+                contact_email = (
+                    _extract_contact_email(description, result[1], result[2])
+                    or _get_department_contact_email(result[3])
+                )
+
             context = _fact_context(
-                "Program", result[0], "Program Coordinator", coordinator
+                "Program", result[0], "Program Coordinator", coordinator, contact_email
             )
 
             return (context, result[3], "coordinator")
@@ -3707,11 +3927,11 @@ def structured_search(question, memory=None):
 
     if faculty_level_result:
 
-        matched_faculty, faculty_rows = faculty_level_result
+        matched_faculty, faculty_rows, faculty_source_urls = faculty_level_result
 
         return (
             _format_faculty_list_context("Faculty", matched_faculty, faculty_rows),
-            None,
+            faculty_source_urls,
             "faculty_list"
         )
 
@@ -3729,11 +3949,11 @@ def structured_search(question, memory=None):
 
     if dept_list_result:
 
-        matched_department, faculty_rows = dept_list_result
+        matched_department, faculty_rows, faculty_source_urls = dept_list_result
 
         return (
             _format_faculty_list_context("Department", matched_department, faculty_rows),
-            None,
+            faculty_source_urls,
             "department_faculty_list"
         )
 
@@ -3755,8 +3975,13 @@ def structured_search(question, memory=None):
 
             coordinator = result["coordinator"]
 
+            contact_email = (
+                None if coordinator
+                else _extract_contact_email(result[2], result[1])
+            )
+
             context = _fact_context(
-                "Department", result[0], "Department Coordinator", coordinator
+                "Department", result[0], "Department Coordinator", coordinator, contact_email
             )
 
             return (context, result[3], "coordinator")
@@ -3814,7 +4039,19 @@ Description:
 
             fact_label = faculty_fact_intent.capitalize()
 
-            context = _fact_context("Name", result[0], fact_label, fact_value)
+            # Only offered when the missing fact ISN'T email itself
+            # (suggesting "email them at <their own missing email>"
+            # would be circular/meaningless) - the person's own email
+            # column, already a real address on file, not free text to
+            # search.
+            contact_email = (
+                result[4] if faculty_fact_intent != "email" and not fact_value
+                else None
+            )
+
+            context = _fact_context(
+                "Name", result[0], fact_label, fact_value, contact_email
+            )
 
             return context, result[9], "faculty_profile"
 
@@ -3848,11 +4085,11 @@ Research Interests:
 
     if research_topic_result:
 
-        topic, faculty_rows = research_topic_result
+        topic, faculty_rows, faculty_source_urls = research_topic_result
 
         return (
             _format_faculty_list_context("Research Topic", topic, faculty_rows),
-            None,
+            faculty_source_urls,
             "research"
         )
 
@@ -3973,12 +4210,16 @@ _TYPE_HINTED_PATTERNS = [
     (re.compile(r"\bthe program\b", re.IGNORECASE), "program"),
 ]
 
-# "they"/"them" most commonly refer to a person in English, so faculty
-# is tried first, falling back to the standard priority below only if
-# no faculty is on record.
+# "they"/"them"/"she"/"he"/"her"/"him" most commonly refer to a person
+# in English, so faculty is tried first, falling back to the standard
+# priority below only if no faculty is on record.
 _PERSON_HINTED_PATTERNS = [
     re.compile(r"\bthey\b", re.IGNORECASE),
     re.compile(r"\bthem\b", re.IGNORECASE),
+    re.compile(r"\bshe\b", re.IGNORECASE),
+    re.compile(r"\bhe\b", re.IGNORECASE),
+    re.compile(r"\bher\b", re.IGNORECASE),
+    re.compile(r"\bhim\b", re.IGNORECASE),
 ]
 
 # Bare, type-agnostic references - tried against each memory slot in the
@@ -4070,26 +4311,37 @@ def _resolve_coordinator_target(memory):
     return ("program", legacy_program) if legacy_program else None
 
 
+def _attempt_coordinator_resolution(memory):
+    """Shared by both a pronoun-triggered coordinator reference ("who
+    coordinates it?", via _attempt_contextual_resolution() below) and a
+    bare, pronoun-less one ("Who is the coordinator?", via
+    resolve_contextual_reference()'s own top-level check) - both are the
+    exact same question once "coordinat..." has been recognized, and
+    should resolve identically regardless of which phrasing triggered
+    them."""
+
+    target = _resolve_coordinator_target(memory)
+
+    if not target:
+        return ("clarify", _GENERIC_CLARIFICATION_MESSAGE)
+
+    entity_type, value = target
+
+    rewritten_question = _COORDINATOR_REWRITE_TEMPLATES[entity_type].format(value=value)
+
+    result = structured_search(rewritten_question, memory)
+
+    if result:
+        context, source, response_type = result
+        return ("resolved", context, source, response_type)
+
+    return ("clarify", _CLARIFICATION_MESSAGES[entity_type])
+
+
 def _attempt_contextual_resolution(question, pattern, type_priority, memory):
 
     if _COORDINATOR_REWRITE_PATTERN.search(question):
-
-        target = _resolve_coordinator_target(memory)
-
-        if not target:
-            return ("clarify", _GENERIC_CLARIFICATION_MESSAGE)
-
-        entity_type, value = target
-
-        rewritten_question = _COORDINATOR_REWRITE_TEMPLATES[entity_type].format(value=value)
-
-        result = structured_search(rewritten_question, memory)
-
-        if result:
-            context, source, response_type = result
-            return ("resolved", context, source, response_type)
-
-        return ("clarify", _CLARIFICATION_MESSAGES[entity_type])
+        return _attempt_coordinator_resolution(memory)
 
     for rule_pattern, rule_type, template in _INTENT_REWRITE_RULES:
 
@@ -4288,6 +4540,24 @@ def resolve_contextual_reference(question, memory=None):
     if ordinal_match:
         return _attempt_ordinal_resolution(question, ordinal_match.group(1), memory)
 
+    # A bare "coordinator" question ("Who is the coordinator?", "Who's
+    # the program coordinator?") carries no pronoun/reference-type
+    # marker at all for the loops below to trigger on, unlike "who
+    # coordinates it?" (which has "it"). Without this check, such a
+    # question never reaches _attempt_contextual_resolution()'s own
+    # coordinat... handling and falls straight through this function,
+    # eventually reaching domain_guard's off-topic gate - which has no
+    # memory of the conversation and, confirmed live, classifies the
+    # bare word "coordinator" as off-topic on its own merits, producing
+    # a decline instead of correctly resolving against the already-
+    # established program/department. Checked unconditionally here,
+    # exactly like the pronoun-triggered path already does inside
+    # _attempt_contextual_resolution(), since "coordinat..." is itself
+    # already a strong, unambiguous signal that needs no pronoun to
+    # corroborate it.
+    if _COORDINATOR_REWRITE_PATTERN.search(question_lower):
+        return _attempt_coordinator_resolution(memory)
+
     for pattern, entity_type in _TYPE_HINTED_PATTERNS:
 
         if pattern.search(question_lower):
@@ -4330,6 +4600,83 @@ _NO_CONFIDENT_MATCH_MESSAGE = (
     "about something more specific?"
 )
 
+# --- Referent-less pronoun/reference queries reaching the vector fallback ---
+#
+# resolve_contextual_reference() (app.py, tried before hybrid_search) only
+# ever intervenes when memory already has established context to resolve
+# a reference against (its own _memory_has_any_context guard) - by design,
+# so it doesn't misread an ordinary sentence that merely contains "this"/
+# "that" as a follow-up when nothing has been established yet. But that
+# means a query which IS structurally a bare pronoun/reference query -
+# "Does it have prerequisites?", "Can I take it in the fall?" - reaches
+# hybrid_search()'s vector fallback below with no safeguard at all,
+# regardless of memory state: search_vector() has no way to know "it" is
+# undefined and will confidently answer using whatever chunk happens to
+# be nearest by embedding distance (confirmed live: "Does it have
+# prerequisites?" on a fresh session returned a confident answer about
+# CH110; "Can I take it in the fall?" returned one about COOP000 - both
+# fabricated relative to what the user actually asked). _is_referentless_
+# query() reuses the same _TYPE_HINTED_PATTERNS/_GENERIC_REFERENCE_
+# PATTERNS resolve_contextual_reference() already recognizes as reference
+# markers, so the two functions never disagree about what counts as one.
+_REFERENCE_MARKER_PATTERNS = (
+    [pattern for pattern, _ in _TYPE_HINTED_PATTERNS]
+    + _GENERIC_REFERENCE_PATTERNS
+)
+
+# Basic English scaffolding words that carry no topic-specific meaning of
+# their own - used only to judge whether a query that already matches a
+# reference marker above has any real topical content BESIDES the
+# referent itself. Deliberately broader than _NAME_QUERY_FILLER_WORDS
+# (which is tuned for person-name residual detection specifically):
+# personal pronouns ("I"), generic weak verbs ("take", "get"), and common
+# prepositions are exactly the padding words in "Can I take it in the
+# fall?" that add no answerable substance once "it" is removed.
+_REFERENTLESS_SCAFFOLDING_WORDS = {
+    "i", "me", "my", "we", "us", "our", "you", "your",
+    "is", "are", "was", "were", "be", "been", "being",
+    "do", "does", "did", "done",
+    "can", "could", "would", "will", "shall", "should", "may", "might", "must",
+    "have", "has", "had", "having",
+    "take", "takes", "taking", "get", "gets", "getting", "go", "goes", "going",
+    "a", "an", "the", "to", "of", "in", "on", "at", "for", "with", "about",
+    "and", "or", "so", "please",
+}
+
+# A query like "What is the philosophy behind this decision?" still
+# leaves several real content words ("philosophy", "behind", "decision")
+# after its reference marker ("this") and scaffolding are stripped - that
+# must keep working exactly as before. 1 is generous enough to still
+# catch both confirmed bug cases (each leaves exactly one leftover word:
+# "prerequisites", "fall") while requiring at least 2 genuine content
+# words before a query is treated as carrying its own topic.
+_REFERENTLESS_CONTENT_WORD_LIMIT = 1
+
+
+def _is_referentless_query(question):
+    """True for a query that's ENTIRELY a bare pronoun/reference marker
+    (the same patterns resolve_contextual_reference() recognizes) plus
+    generic sentence scaffolding, with no substantive topic content of
+    its own. Checked independently of memory state - see this section's
+    module-level comment for why that matters."""
+
+    question_lower = question.lower()
+
+    if not any(
+        pattern.search(question_lower) for pattern in _REFERENCE_MARKER_PATTERNS
+    ):
+        return False
+
+    residual_text = question_lower
+
+    for pattern in _REFERENCE_MARKER_PATTERNS:
+        residual_text = pattern.sub(" ", residual_text)
+
+    words = re.findall(r"[a-z']+", residual_text)
+    content_words = [w for w in words if w not in _REFERENTLESS_SCAFFOLDING_WORDS]
+
+    return len(content_words) <= _REFERENTLESS_CONTENT_WORD_LIMIT
+
 
 def hybrid_search(question, memory=None):
 
@@ -4343,6 +4690,17 @@ def hybrid_search(question, memory=None):
         })
 
         return result
+
+    if _is_referentless_query(question):
+
+        hybrid_rerank.record_debug_trace({
+            "question": question,
+            "structured_retrieval_used": False,
+            "gate_passed": False,
+            "referentless_query": True,
+        })
+
+        return (_GENERIC_CLARIFICATION_MESSAGE, None, "not_found")
 
     # VECTOR SEARCH
 
