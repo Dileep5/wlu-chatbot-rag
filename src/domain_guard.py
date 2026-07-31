@@ -99,6 +99,72 @@ IN_DOMAIN_KEYWORDS = [
 
 COURSE_CODE_PATTERN = re.compile(r"\b[A-Z]{2,4}\d{3}[A-Z]?\b")
 
+# Keywords generic/broad enough that they routinely appear in ordinary
+# sentences with no connection to WLU at all ("tuition", "policy",
+# "safety", "appeal", "deadline", ...) - unlike an unambiguous marker
+# like "wlu"/"laurier"/a course code/a narrow multi-word WLU phrase, a
+# single match on one of these alone is not a reliable domain signal.
+# Confirmed live: "What is the tuition at the University of Toronto?"
+# and "Tell me about policy 0.0." each matched on exactly one of these
+# words and nothing else, and skipped is_wlu_related()'s LLM classifier
+# entirely as a result - the classifier, given the chance to actually
+# look at either question, would have judged the first correctly
+# off-topic (a competing, explicitly named institution) itself.
+#
+# Every other IN_DOMAIN_KEYWORDS entry not listed here stays an
+# instant, single-match signal - either a proper noun ("wlu", "laurier",
+# "wilfrid laurier"), a narrow multi-word phrase unlikely to occur by
+# coincidence ("financial aid", "student services", "study permit",
+# "academic calendar", "frequently asked questions", ...), or a unique
+# compound term ("onecard").
+_BROAD_KEYWORDS = frozenset({
+    "tuition", "fees", "program", "programs", "course", "courses",
+    "admission", "admissions", "scholarship", "scholarships",
+    "faculty", "faculties", "professor", "campus", "residence",
+    "department", "departments", "credit", "credits", "undergraduate",
+    "graduate", "co-op", "thesis", "registrar", "enrolment",
+    "enrollment", "faq", "parking", "transit", "transportation",
+    "cycling", "dining", "housing", "library", "classroom",
+    "wellness", "mental health", "counselling", "counseling",
+    "accessibility", "accommodation", "indigenous", "safety",
+    "security", "constable", "orientation", "diversity", "equity",
+    "immigration", "visa", "sustainability", "policy", "policies",
+    "deadline", "deadlines", "petition", "appeal", "important dates",
+})
+
+# WLU's own name tokens - never treated as "another institution" when
+# they show up as the head noun of an "X University" / "University of
+# X" match below. Laurier's Waterloo campus means bare "waterloo" is
+# deliberately NOT in _OTHER_KNOWN_INSTITUTIONS either - a real WLU
+# question can legitimately mention Waterloo without being about a
+# different school.
+_WLU_NAME_TOKENS = frozenset({"laurier", "wilfrid", "wlu"})
+
+_UNIVERSITY_OF_X_PATTERN = re.compile(r"\buniversity\s+of\s+([a-z]+)\b")
+_X_UNIVERSITY_PATTERN = re.compile(r"\b([a-z]+(?:\s+[a-z]+)?)\s+university\b")
+
+# Well-known institutions with no "university" in the name at all, so
+# neither structural pattern above would catch them.
+_OTHER_KNOWN_INSTITUTIONS = (
+    "harvard", "mit", "yale", "oxford", "cambridge", "stanford",
+    "princeton", "mcgill", "queen's", "queens",
+)
+
+
+def _mentions_other_institution(question_lower: str) -> bool:
+
+    for match in _UNIVERSITY_OF_X_PATTERN.finditer(question_lower):
+        if match.group(1) not in _WLU_NAME_TOKENS:
+            return True
+
+    for match in _X_UNIVERSITY_PATTERN.finditer(question_lower):
+        if not (set(match.group(1).split()) & _WLU_NAME_TOKENS):
+            return True
+
+    return any(
+        name in question_lower for name in _OTHER_KNOWN_INSTITUTIONS
+    )
+
 
 def matches_wlu_keywords(question: str) -> bool:
 
@@ -107,10 +173,36 @@ def matches_wlu_keywords(question: str) -> bool:
 
     question_lower = question.lower()
 
-    return any(
-        keyword in question_lower
-        for keyword in IN_DOMAIN_KEYWORDS
-    )
+    matched_keywords = [
+        keyword for keyword in IN_DOMAIN_KEYWORDS
+        if keyword in question_lower
+    ]
+
+    if not matched_keywords:
+        return False
+
+    if any(keyword not in _BROAD_KEYWORDS for keyword in matched_keywords):
+        return True
+
+    # Every match is a broad/generic keyword. On its own that's still
+    # usually a fine signal - "department"/"program"/"course"/"policy"
+    # etc. alone correctly fires for real (or fictional-but-WLU-shaped,
+    # e.g. "the Underwater Basketweaving department") questions, and
+    # retrieval's own dedicated not-found fallbacks are exactly what
+    # handle the fictional case gracefully from there - deferring
+    # those to the LLM classifier instead was tried and reverted: it
+    # broke that fallback path, since the classifier has no way to
+    # distinguish "shaped like a WLU question, just about something
+    # that doesn't exist" from "not about WLU at all" the way a direct
+    # DB lookup can.
+    #
+    # A competing, explicitly named institution is the one case where
+    # a lone broad-keyword match is genuinely unreliable rather than
+    # just under-specified - confirmed live, "What is the tuition at
+    # the University of Toronto?" matched on "tuition" alone and never
+    # reached the classifier, which - given the chance - correctly
+    # judged it off-topic itself.
+    return not _mentions_other_institution(question_lower)
 
 
 def classify_with_llm(question: str) -> bool:

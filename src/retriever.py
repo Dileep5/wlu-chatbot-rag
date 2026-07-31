@@ -3662,6 +3662,21 @@ _POLICY_NUMBER_PATTERN = re.compile(
 )
 
 
+def _policy_number_shape(question):
+    """Distinguishes "no policy-number shape present at all" from "a
+    number-shaped token is present right after the word policy/policies
+    but search_policy() found no row for it" - the same distinction
+    _course_code_shape() draws for course codes, and needed for the
+    same reason: search_policy() returning None on its own doesn't say
+    which of those two happened, and only the second one is definitive
+    enough to answer immediately (see the not-found guard in
+    structured_search() below)."""
+
+    match = _POLICY_NUMBER_PATTERN.search(question)
+
+    return match.group(1) if match else None
+
+
 def search_policy(question, memory=None):
 
     if not POLICIES_DB_READY:
@@ -4140,6 +4155,25 @@ Research Interests:
 
     if policy_result:
         return policy_result
+
+    # A number-shaped token is present right after "policy"/"policies"
+    # (e.g. "policy 0.0") but search_policy() found no matching row -
+    # definitive enough to answer immediately rather than letting it
+    # fall through to the vector fallback, which has no way to know the
+    # number doesn't exist and would otherwise paraphrase whatever
+    # unrelated chunks happen to be nearest - confirmed live, this was
+    # exactly the source of non-deterministic pass/fail on fake policy
+    # numbers in the benchmark (same failure mode _course_code_shape()
+    # already guards against for fake course codes, mirrored here).
+    policy_number_shape = _policy_number_shape(question)
+
+    if policy_number_shape:
+        return (
+            f"I couldn't find a policy numbered {policy_number_shape} in "
+            f"the Wilfrid Laurier University data.",
+            None,
+            "not_found"
+        )
 
     # COURSE NAME (last resort)
     # Tried dead last, after every other structured capability above -
