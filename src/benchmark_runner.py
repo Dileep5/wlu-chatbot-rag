@@ -98,6 +98,48 @@ _NEGATED_INFO_AVAILABILITY_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# The off-topic branch (app.py) used to assign a fixed OFF_TOPIC_MESSAGE
+# constant directly, with no LLM involvement - production polish
+# (warmer tone for social/emotional off-topic messages vs. genuine
+# factual ones) replaced that with two LLM-generated paths,
+# generate_offtopic_decline()/generate_offtopic_social_response()
+# (app.py), so the literal constant is now only their no-API-key
+# fallback.
+#
+# response_type is the real, primary signal now (see
+# _looks_like_decline() below): app.py tags every response from those
+# two functions with "off_topic_decline"/"off_topic_social", read
+# straight from session state - deterministic, regardless of exact
+# LLM wording. _OFFTOPIC_SCOPE_PATTERN below started as the PRIMARY
+# mechanism and was repeatedly insufficient: temperature (0.7-0.8)
+# means the scope statement both prompts require ("I'm all about WLU" /
+# "my focus is on Wilfrid Laurier University" / "I'm here for WLU
+# questions", ...) gets phrased differently every run, and confirmed-
+# live gaps kept surfacing under real testing - "I'm here specifically
+# for..." (extra adverb before "for"), "my focus is WLU" (missing
+# "on"), "I focus specifically on..." (adverb before "on"), "I'm here
+# to chat specifically about..." (different verb/preposition
+# entirely). Each fix closed the specific gap found and immediately
+# revealed another - the same "can never have full coverage" problem
+# _NEGATED_INFO_AVAILABILITY_PATTERN's own comment above already
+# documents for LLM-phrased text in general, which is what motivated
+# switching to response_type as the primary signal instead. Kept only
+# as a fallback for content this file's checks might exercise without
+# response_type available. Kept identical to evaluate.py's own copy of
+# this same pattern (not imported - this file already deliberately
+# avoids importing retriever.py/app.py internals beyond the one lazy
+# OFF_TOPIC_MESSAGE import below, to stay a self-contained check
+# against the real app's actual output, not its internals).
+_OFFTOPIC_SCOPE_PATTERN = re.compile(
+    r"\bfocus(?:ed)?\s+(?:is\s+)?on\b.{0,60}\b(?:wlu|wilfrid\s+laurier)\b"
+    r"|\bfocus\s+is\s+(?:wlu|wilfrid\s+laurier)\b"
+    r"|\bhere\s+(?:specifically\s+|solely\s+|primarily\s+|mainly\s+|"
+    r"really\s+|just\s+)?(?:for|to\s+help)\b"
+    r".{0,60}\b(?:wlu|wilfrid\s+laurier)\b"
+    r"|\ball\s+about\b.{0,60}\b(?:wlu|wilfrid\s+laurier)\b",
+    re.IGNORECASE
+)
+
 
 def load_benchmark():
     with BENCHMARK_FILE.open("r", encoding="utf-8") as f:
@@ -106,19 +148,24 @@ def load_benchmark():
 
 def _looks_like_decline(content, response_type):
     """True if the response is a graceful decline rather than a
-    confident, specific answer. Deterministic response types are
-    checked via exact sentinel-phrase matching (fully precise, since
-    that text is fixed and never LLM-generated); the LLM-phrased
-    grounding-prompt path is checked via
-    _NEGATED_INFO_AVAILABILITY_PATTERN, which generalizes across
-    wordings instead of requiring every variant to be enumerated."""
+    confident, specific answer. response_type is checked first and is
+    the reliable signal for the response_type-tagged paths
+    ("not_found", "off_topic_decline", "off_topic_social" - all
+    assigned directly in app.py, never inferred from wording); the
+    LLM-phrased grounding-prompt path (no dedicated response_type) is
+    checked via _NEGATED_INFO_AVAILABILITY_PATTERN, which generalizes
+    across wordings instead of requiring every variant to be
+    enumerated."""
 
-    if response_type == "not_found":
+    if response_type in ("not_found", "off_topic_decline", "off_topic_social"):
         return True
 
     from app import OFF_TOPIC_MESSAGE
 
     if OFF_TOPIC_MESSAGE in content:
+        return True
+
+    if _OFFTOPIC_SCOPE_PATTERN.search(content):
         return True
 
     lower = content.lower()

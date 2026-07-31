@@ -167,3 +167,79 @@ def is_wlu_related(question: str) -> bool:
         return True
 
     return classify_with_llm(question)
+
+
+def is_factual_offtopic(question: str) -> bool:
+    """Only ever called on a message already confirmed off-topic by
+    is_wlu_related() above - a second, narrower classification of WHAT
+    KIND of off-topic message it is, not whether it's off-topic at all.
+
+    True: a genuine request for a specific fact/piece of information/
+    instructions about the outside world (weather, trivia, news, other
+    schools, coding help, how-to instructions, general knowledge) -
+    app.py must still decline the actual fact for these, just more
+    warmly than a flat canned string.
+
+    False: purely social/emotional/conversational content with no real
+    information being requested (a greeting, small talk, expressing a
+    mood or feeling) - app.py reacts warmly to what the user said
+    instead of using decline phrasing at all, since there's no fact
+    being asked for and therefore no hallucination risk in reacting to
+    it directly.
+
+    Deliberately biased toward True (factual) on any ambiguity: this
+    function's only two callers both eventually produce a WLU-focused
+    reply either way, but the failure mode of wrongly returning False
+    (treating a real question as "just chat") is materially worse than
+    the reverse - it risks the warm-chat path producing what looks like
+    a real answer to a real question, exactly the hallucination this
+    project has spent most of its effort preventing. Wrongly returning
+    True for genuinely idle chat only costs a slightly more formal
+    decline instead of a warm reaction - a tone miss, not a factual one."""
+
+    api_key = os.getenv("OPENAI_API_KEY")
+
+    if not api_key:
+        # Can't classify without a key - the safer default is to treat
+        # it as factual, so the caller declines rather than risks
+        # reacting to something that was actually a real question.
+        return True
+
+    client = OpenAI()
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "The user's message is already known to be unrelated "
+                    "to Wilfrid Laurier University. Classify it as one of "
+                    "exactly two categories:\n\n"
+                    "FACTUAL - the message is a genuine request for a "
+                    "specific fact, piece of information, instructions, or "
+                    "real-world knowledge - e.g. weather, trivia, news, "
+                    "sports results, other schools/companies, how-to "
+                    "instructions, coding help, general knowledge "
+                    "questions, requests to write or generate something.\n\n"
+                    "SOCIAL - the message is purely social, emotional, or "
+                    "conversational, with no actual information being "
+                    "requested - e.g. a greeting, small talk, expressing a "
+                    "mood or feeling, casual chit-chat.\n\n"
+                    "If the message mixes both, or you are genuinely "
+                    "unsure which it is, classify it as FACTUAL.\n\n"
+                    "Reply with exactly one word: FACTUAL or SOCIAL."
+                )
+            },
+            {
+                "role": "user",
+                "content": question
+            }
+        ],
+        temperature=0,
+        max_tokens=5
+    )
+
+    label = response.choices[0].message.content.strip().upper()
+
+    return not label.startswith("SOCIAL")

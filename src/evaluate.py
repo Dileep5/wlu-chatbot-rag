@@ -1,7 +1,8 @@
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List
+from typing import Callable, List, Optional
 
 from streamlit.testing.v1 import AppTest
 
@@ -20,7 +21,14 @@ sys.path.insert(0, str(SRC_DIR))
 class TestCase:
     name: str
     turns: List[str]          # user messages sent in order; only the last is "the question"
-    check: Callable[[str, AppTest], bool]
+    # Second parameter is named `at` for historical reasons (it used to
+    # be a hardcoded None, a vestige of an AppTest object no check
+    # actually used) but now carries the last response's response_type
+    # string (e.g. "not_found", "off_topic_decline", "policy", or None)
+    # - see run_turns()/run_test() below. Renaming the parameter in all
+    # ~110 existing check lambdas would be a purely cosmetic, much
+    # larger diff for the same behavior, so it was left as `at`.
+    check: Callable[[str, Optional[str]], bool]
     category: str
     # Which of the four Sprint 8B report buckets this test's pass/fail
     # rolls up into. Defaults to "retrieval" so every pre-existing
@@ -77,7 +85,36 @@ def is_non_empty_response(text: str) -> bool:
     return bool(text.strip()) and "bot error" not in text.lower()
 
 
-def is_off_topic_decline(text: str) -> bool:
+# Each alternative carries its own "...WLU" tail rather than one
+# shared suffix, and the connector between the marker phrase and the
+# tail is intentionally either tight (adjacent, no wide gap allowed)
+# or requires a specific word ("on") - not "any word within 60 chars"
+# for every phrasing. Widening it to match ANY phrasing variant
+# uniformly was tried and reverted: making "on" fully optional in
+# "focus...WLU" started matching real grounded content that happens
+# to say "focus" and "Wilfrid Laurier University" within 60 characters
+# of each other (this corpus's page titles routinely end in "| Wilfrid
+# Laurier University"), which would have misclassified genuine answers
+# as declines - so "focus is WLU" (no "on") is caught by its own tight,
+# adjacent-only branch instead of loosening the wide-gap "on" branch.
+#
+# Confirmed live, both branches below were needed: "I'm here
+# specifically for topics related to Wilfrid Laurier University..."
+# (an extra adverb between "here" and "for") and "My focus is WLU..."
+# (missing "on" entirely) each slipped past the original narrower
+# pattern and were wrongly scored as non-declines.
+_OFFTOPIC_SCOPE_PATTERN = re.compile(
+    r"\bfocus(?:ed)?\s+(?:is\s+)?on\b.{0,60}\b(?:wlu|wilfrid\s+laurier)\b"
+    r"|\bfocus\s+is\s+(?:wlu|wilfrid\s+laurier)\b"
+    r"|\bhere\s+(?:specifically\s+|solely\s+|primarily\s+|mainly\s+|"
+    r"really\s+|just\s+)?(?:for|to\s+help)\b"
+    r".{0,60}\b(?:wlu|wilfrid\s+laurier)\b"
+    r"|\ball\s+about\b.{0,60}\b(?:wlu|wilfrid\s+laurier)\b",
+    re.IGNORECASE
+)
+
+
+def is_off_topic_decline(text: str, response_type: Optional[str] = None) -> bool:
     # Previously: "wilfrid laurier" in lower and "only" in lower. This
     # heuristic produced confirmed, reproduced false positives (Sprint
     # 9B/9C investigations) whenever a genuinely correct, grounded answer
@@ -89,20 +126,43 @@ def is_off_topic_decline(text: str) -> bool:
     # so the two-generic-word co-occurrence check was never a reliable
     # signal of an off-topic decline specifically.
     #
-    # The off-topic decline is actually a FIXED, hardcoded constant
-    # (app.py's OFF_TOPIC_MESSAGE) returned verbatim with no LLM
-    # involvement whatsoever - the off-topic branch in app.py assigns it
-    # directly (`answer = OFF_TOPIC_MESSAGE`), never through
-    # generate_answer(). Checking for the actual constant text is
-    # therefore not a heuristic at all: it deterministically matches
-    # exactly and only when that exact branch fired, eliminating the
-    # false-positive class entirely. Imported lazily (matching this
-    # file's existing pattern for retriever/get_faculty_links/
-    # load_faculty) rather than at module level, so importing app.py's
-    # side effects only ever happen after an AppTest has already run one.
+    # response_type is the real fix, checked first: app.py's off-topic
+    # branch tags every response it produces with "off_topic_decline" or
+    # "off_topic_social" (see generate_offtopic_decline()/
+    # generate_offtopic_social_response(), app.py), a deterministic
+    # signal that can never miss regardless of the LLM's exact wording -
+    # the same technique benchmark_runner.py already uses for
+    # response_type == "not_found". _OFFTOPIC_SCOPE_PATTERN below is
+    # kept only as a fallback for the rare caller that doesn't have
+    # response_type available (none currently do, now that run_turns()/
+    # run_test() thread it through - see below - but keeping the regex
+    # means this function still degrades gracefully rather than going
+    # blind if that ever changes again).
+    #
+    # The regex itself was tried as the PRIMARY mechanism first and
+    # repeatedly proved insufficient: LLM temperature (0.7-0.8) means
+    # the scope statement both off-topic prompts require ("I'm all about
+    # WLU" / "my focus is on Wilfrid Laurier University" / "I'm here for
+    # WLU questions", ...) gets phrased differently every run, and
+    # confirmed-live gaps kept surfacing under real testing - "I'm here
+    # specifically for..." (extra adverb before "for"), "my focus is WLU"
+    # (missing "on"), "I focus specifically on..." (adverb before "on"),
+    # "I'm here to chat specifically about..." (different verb/
+    # preposition entirely). Each fix closed the specific gap found and
+    # immediately revealed another, the same "can never have full
+    # coverage" problem _NEGATED_INFO_AVAILABILITY_PATTERN's own comment
+    # (benchmark_runner.py) already documents for LLM-phrased text in
+    # general - which is what motivated switching to response_type as
+    # the primary signal instead of continuing to enumerate wordings.
+    if response_type in ("off_topic_decline", "off_topic_social"):
+        return True
+
     from app import OFF_TOPIC_MESSAGE
 
-    return OFF_TOPIC_MESSAGE in text
+    if OFF_TOPIC_MESSAGE in text:
+        return True
+
+    return bool(_OFFTOPIC_SCOPE_PATTERN.search(text))
 
 
 def is_clarification_response(text: str) -> bool:
@@ -117,17 +177,20 @@ def is_clarification_response(text: str) -> bool:
     return "i'm not sure" in text.lower()
 
 
-def is_graceful_fallback(text: str) -> bool:
+def is_graceful_fallback(text: str, response_type: Optional[str] = None) -> bool:
     """Capability-aware validator for 'this should decline/fall back
     gracefully rather than fabricate' tests (Sprint 10A) - replaces the
     repeated inline `is_non_empty_response(resp) and not
-    is_off_topic_decline(resp)` lambda pattern used across every
+    is_off_topic_decline(resp, at)` lambda pattern used across every
     'unsupported' metric test with one named helper expressing what's
     actually being verified: a real, non-empty response was produced,
     and it wasn't misrouted into an off-topic decline (using the fixed,
     non-heuristic check above)."""
 
-    return is_non_empty_response(text) and not is_off_topic_decline(text)
+    return (
+        is_non_empty_response(text)
+        and not is_off_topic_decline(text, response_type)
+    )
 
 
 # -----------------------------
@@ -160,17 +223,35 @@ def get_last_response_text(at: AppTest) -> str:
     return ""
 
 
-def run_turns(turns: List[str]) -> str:
+def get_last_response_type(at: AppTest) -> Optional[str]:
+    """response_type as app.py itself set it for the last turn (e.g.
+    "not_found", "policy", "off_topic_decline", or None for greetings/
+    conversation/off_topic_social) - read directly from session state
+    rather than inferred from the rendered text, the same source
+    benchmark_runner.py's run_benchmark_item() already reads
+    (msg.get("response_type"))."""
+
+    messages = at.session_state.messages
+
+    if not messages:
+        return None
+
+    return messages[-1].get("response_type")
+
+
+def run_turns(turns: List[str]) -> tuple:
     at = AppTest.from_file(APP_PATH)
     at.run(timeout=90)
 
     response = ""
+    response_type = None
 
     for turn in turns:
         at.chat_input[0].set_value(turn).run(timeout=90)
         response = get_last_response_text(at)
+        response_type = get_last_response_type(at)
 
-    return response
+    return response, response_type
 
 
 # -----------------------------
@@ -194,13 +275,13 @@ BASIC_CONVERSATION_TESTS = [
     TestCase(
         name="Small talk - thank you",
         turns=["thank you"],
-        check=lambda resp, at: is_non_empty_response(resp) and not is_off_topic_decline(resp),
+        check=lambda resp, at: is_non_empty_response(resp) and not is_off_topic_decline(resp, at),
         category="Basic Conversation",
     ),
     TestCase(
         name="Small talk - how are you",
         turns=["how are you"],
-        check=lambda resp, at: is_non_empty_response(resp) and not is_off_topic_decline(resp),
+        check=lambda resp, at: is_non_empty_response(resp) and not is_off_topic_decline(resp, at),
         category="Basic Conversation",
     ),
     TestCase(
@@ -321,7 +402,7 @@ UNDERGRADUATE_PROGRAM_TESTS = [
         turns=["Tell me about Computer Science."],
         check=lambda resp, at: (
             contains_any(resp, "Computer Science")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Undergraduate Programs",
     ),
@@ -330,7 +411,7 @@ UNDERGRADUATE_PROGRAM_TESTS = [
         turns=["Tell me about the Biology major."],
         check=lambda resp, at: (
             contains_any(resp, "Biology")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Undergraduate Programs",
     ),
@@ -339,7 +420,7 @@ UNDERGRADUATE_PROGRAM_TESTS = [
         turns=["What is the Data Science minor?"],
         check=lambda resp, at: (
             contains_any(resp, "Data Science")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Undergraduate Programs",
     ),
@@ -348,7 +429,7 @@ UNDERGRADUATE_PROGRAM_TESTS = [
         turns=["What undergraduate programs are available?"],
         check=lambda resp, at: (
             is_non_empty_response(resp)
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Undergraduate Programs",
     ),
@@ -381,7 +462,7 @@ UNDERGRADUATE_COURSE_REQUIREMENT_TESTS = [
         turns=["What courses are required for Computer Science?"],
         check=lambda resp, at: (
             contains_any(resp, "CP104", "CP312")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Undergraduate Course Requirements",
     ),
@@ -390,7 +471,7 @@ UNDERGRADUATE_COURSE_REQUIREMENT_TESTS = [
         turns=["What is required for the Computer Science major?"],
         check=lambda resp, at: (
             contains_any(resp, "CP104", "CP312")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Undergraduate Course Requirements",
     ),
@@ -421,7 +502,7 @@ UNDERGRADUATE_COURSE_REQUIREMENT_TESTS = [
     TestCase(
         name="Unsupported undergraduate layout still answers descriptively, no fabrication",
         turns=["What courses are required for the Biology minor?"],
-        check=lambda resp, at: is_graceful_fallback(resp),
+        check=lambda resp, at: is_graceful_fallback(resp, at),
         category="Undergraduate Course Requirements",
         metric="unsupported",
     ),
@@ -445,7 +526,7 @@ FLAT_REQUIRED_COURSE_TESTS = [
         turns=["What is required for the Certificate in Criminology?"],
         check=lambda resp, at: (
             contains_any(resp, "CC100", "CC210")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Flat Required Courses",
     ),
@@ -458,7 +539,7 @@ FLAT_REQUIRED_COURSE_TESTS = [
     TestCase(
         name="Pool-style program (choose/selected from) still answers descriptively, no fabrication",
         turns=["What courses are required for the Ancient Studies Minor?"],
-        check=lambda resp, at: is_graceful_fallback(resp),
+        check=lambda resp, at: is_graceful_fallback(resp, at),
         category="Flat Required Courses",
         metric="unsupported",
     ),
@@ -503,7 +584,7 @@ RESEARCH_TOPIC_TESTS = [
         turns=["Who researches machine learning?"],
         check=lambda resp, at: (
             contains_any(resp, "Azam Asilian Bidgoli", "Yang Liu", "Lei Gao", "Emad Mohammed")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Research Topic",
     ),
@@ -512,7 +593,7 @@ RESEARCH_TOPIC_TESTS = [
         turns=["Who researches artificial intelligence?"],
         check=lambda resp, at: (
             contains_any(resp, "Lei Gao", "Samuel Okegbile", "Sukhjit Singh Sehra", "Emad Mohammed")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Research Topic",
     ),
@@ -521,7 +602,7 @@ RESEARCH_TOPIC_TESTS = [
         turns=["Who researches consumer behavior?"],
         check=lambda resp, at: (
             contains_any(resp, "Hae Joo Kim", "Sarah J. S. Wilner", "Sarah Wilner")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Research Topic",
     ),
@@ -530,7 +611,7 @@ RESEARCH_TOPIC_TESTS = [
         turns=["Who researches quantum computing?"],
         check=lambda resp, at: (
             contains_any(resp, "Alexei Kaltchenko", "Li Wei", "Shohini Ghose")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Research Topic",
     ),
@@ -542,7 +623,7 @@ FACULTY_COURSES_TAUGHT_TESTS = [
         turns=["Who has taught CP104?"],
         check=lambda resp, at: (
             contains_any(resp, "CP104")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Faculty Courses Taught",
     ),
@@ -551,7 +632,7 @@ FACULTY_COURSES_TAUGHT_TESTS = [
         turns=["Who has taught Operating Systems?"],
         check=lambda resp, at: (
             contains_any(resp, "Operating Systems", "CP386")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Faculty Courses Taught",
     ),
@@ -568,14 +649,14 @@ FACULTY_COURSES_TAUGHT_TESTS = [
     TestCase(
         name="Graceful no-record response for an unknown course code",
         turns=["Who has taught CP999?"],
-        check=lambda resp, at: is_graceful_fallback(resp),
+        check=lambda resp, at: is_graceful_fallback(resp, at),
         category="Faculty Courses Taught",
         metric="unsupported",
     ),
     TestCase(
         name="Graceful no-match response for an unknown course name",
         turns=["Who has taught Advanced Underwater Basket Weaving?"],
-        check=lambda resp, at: is_graceful_fallback(resp),
+        check=lambda resp, at: is_graceful_fallback(resp, at),
         category="Faculty Courses Taught",
         metric="unsupported",
     ),
@@ -591,7 +672,7 @@ FACULTY_COURSES_TAUGHT_TESTS = [
         turns=["Who teaches CP312?"],
         check=lambda resp, at: (
             contains_any(resp, "Foley", "Ebrahimi")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Faculty Courses Taught",
     ),
@@ -600,7 +681,7 @@ FACULTY_COURSES_TAUGHT_TESTS = [
         turns=["Who teaches BU111?"],
         check=lambda resp, at: (
             contains_any(resp, "Brandon Van Dam", "Van Dam")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Faculty Courses Taught",
     ),
@@ -609,14 +690,14 @@ FACULTY_COURSES_TAUGHT_TESTS = [
         turns=["Who teaches Operating Systems?"],
         check=lambda resp, at: (
             contains_any(resp, "Operating Systems", "CP386")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Faculty Courses Taught",
     ),
     TestCase(
         name="Present tense - graceful no-record response for an unknown course code",
         turns=["Who teaches CP999?"],
-        check=lambda resp, at: is_graceful_fallback(resp),
+        check=lambda resp, at: is_graceful_fallback(resp, at),
         category="Faculty Courses Taught",
         metric="unsupported",
     ),
@@ -631,7 +712,7 @@ FACULTY_COURSES_TAUGHT_TESTS = [
         check=lambda resp, at: (
             contains_any(resp, "Marketing")
             and "no course matching" not in resp.lower()
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Faculty Courses Taught",
     ),
@@ -647,7 +728,7 @@ PERSON_TOPIC_COURSES_TAUGHT_TESTS = [
         turns=["Has Kaiyu Li taught algorithm courses?"],
         check=lambda resp, at: (
             contains_any(resp, "CP600", "Algorithm")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Person + Topic Courses Taught",
     ),
@@ -656,26 +737,26 @@ PERSON_TOPIC_COURSES_TAUGHT_TESTS = [
         turns=["Has Emad Mohammed taught any AI courses?"],
         check=lambda resp, at: (
             contains_any(resp, "CP468", "Artificial Intelligence")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Person + Topic Courses Taught",
     ),
     TestCase(
         name="No topical match for a resolved person with real course history",
         turns=["Has Kaiyu Li taught networking courses?"],
-        check=lambda resp, at: is_graceful_fallback(resp),
+        check=lambda resp, at: is_graceful_fallback(resp, at),
         category="Person + Topic Courses Taught",
     ),
     TestCase(
         name="No course-history available for a resolved person",
         turns=["Has Shohini Ghose taught any AI courses?"],
-        check=lambda resp, at: is_graceful_fallback(resp),
+        check=lambda resp, at: is_graceful_fallback(resp, at),
         category="Person + Topic Courses Taught",
     ),
     TestCase(
         name="Unknown/unresolvable faculty member",
         turns=["Has John Q Nonexistentperson taught database courses?"],
-        check=lambda resp, at: is_graceful_fallback(resp),
+        check=lambda resp, at: is_graceful_fallback(resp, at),
         category="Person + Topic Courses Taught",
     ),
 ]
@@ -684,31 +765,31 @@ DEPARTMENT_FALSE_POSITIVE_TESTS = [
     TestCase(
         name="Coffee history is not the History department",
         turns=["Tell me about the history of coffee."],
-        check=lambda resp, at: is_off_topic_decline(resp),
+        check=lambda resp, at: is_off_topic_decline(resp, at),
         category="Department False-Positive Prevention",
     ),
     TestCase(
         name="Speaking English is not the English department",
         turns=["Do you speak English?"],
-        check=lambda resp, at: is_off_topic_decline(resp),
+        check=lambda resp, at: is_off_topic_decline(resp, at),
         category="Department False-Positive Prevention",
     ),
     TestCase(
         name="General philosophy is not the Philosophy department",
         turns=["What is the philosophy behind this decision?"],
-        check=lambda resp, at: is_off_topic_decline(resp),
+        check=lambda resp, at: is_off_topic_decline(resp, at),
         category="Department False-Positive Prevention",
     ),
     TestCase(
         name="Loving music is not the Music department",
         turns=["I love music."],
-        check=lambda resp, at: is_off_topic_decline(resp),
+        check=lambda resp, at: is_off_topic_decline(resp, at),
         category="Department False-Positive Prevention",
     ),
     TestCase(
         name="Common-sense psychology is not the Psychology department",
         turns=["This is just common sense psychology."],
-        check=lambda resp, at: is_off_topic_decline(resp),
+        check=lambda resp, at: is_off_topic_decline(resp, at),
         category="Department False-Positive Prevention",
     ),
     TestCase(
@@ -716,7 +797,7 @@ DEPARTMENT_FALSE_POSITIVE_TESTS = [
         turns=["Tell me about the History department"],
         check=lambda resp, at: (
             contains_any(resp, "History")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Department False-Positive Prevention",
     ),
@@ -725,7 +806,7 @@ DEPARTMENT_FALSE_POSITIVE_TESTS = [
         turns=["History at Laurier"],
         check=lambda resp, at: (
             contains_any(resp, "History")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Department False-Positive Prevention",
     ),
@@ -734,7 +815,7 @@ DEPARTMENT_FALSE_POSITIVE_TESTS = [
         turns=["English program"],
         check=lambda resp, at: (
             contains_any(resp, "English")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Department False-Positive Prevention",
     ),
@@ -743,7 +824,7 @@ DEPARTMENT_FALSE_POSITIVE_TESTS = [
         turns=["Faculty of Music"],
         check=lambda resp, at: (
             contains_any(resp, "Music")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Department False-Positive Prevention",
     ),
@@ -761,7 +842,7 @@ COORDINATOR_LOOKUP_TESTS = [
         turns=["Who is the program coordinator for the Master of Applied Computing?"],
         check=lambda resp, at: (
             contains_any(resp, "Dariush Ebrahimi", "Usama Mir")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Coordinator Lookup",
     ),
@@ -770,14 +851,14 @@ COORDINATOR_LOOKUP_TESTS = [
         turns=["Who is the program coordinator for the Master of Computer Science?"],
         check=lambda resp, at: (
             contains_any(resp, "Dariush Ebrahimi", "Usama Mir")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Coordinator Lookup",
     ),
     TestCase(
         name="MBA coordinator - graceful fallback (no data on file)",
         turns=["Who coordinates the MBA?"],
-        check=lambda resp, at: is_graceful_fallback(resp),
+        check=lambda resp, at: is_graceful_fallback(resp, at),
         category="Coordinator Lookup",
         metric="unsupported",
     ),
@@ -801,7 +882,7 @@ DEPARTMENT_COORDINATOR_TESTS = [
         turns=["Who coordinates the History department?"],
         check=lambda resp, at: (
             contains_any(resp, "Susan Neylan")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Department Coordinator",
     ),
@@ -810,21 +891,21 @@ DEPARTMENT_COORDINATOR_TESTS = [
         turns=["Who is the coordinator of Biology?"],
         check=lambda resp, at: (
             contains_any(resp, "Jonathan Wilson")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Department Coordinator",
     ),
     TestCase(
         name="Department without coordinator data - graceful fallback",
         turns=["Who coordinates the Archaeology and Heritage Studies department?"],
-        check=lambda resp, at: is_graceful_fallback(resp),
+        check=lambda resp, at: is_graceful_fallback(resp, at),
         category="Department Coordinator",
         metric="unsupported",
     ),
     TestCase(
         name="Unsupported/nonexistent department - no fabrication",
         turns=["Who coordinates the Underwater Basketweaving department?"],
-        check=lambda resp, at: is_graceful_fallback(resp),
+        check=lambda resp, at: is_graceful_fallback(resp, at),
         category="Department Coordinator",
         metric="unsupported",
     ),
@@ -961,7 +1042,7 @@ COURSE_PREREQUISITE_TESTS = [
     TestCase(
         name="Hallucination guard - nonexistent course code",
         turns=["Does CP312 require CP999?"],
-        check=lambda resp, at: is_graceful_fallback(resp),
+        check=lambda resp, at: is_graceful_fallback(resp, at),
         category="Course Prerequisites",
         metric="unsupported",
     ),
@@ -980,7 +1061,7 @@ COURSE_METADATA_TESTS = [
         turns=["What is CQ609?"],
         check=lambda resp, at: (
             contains_any(resp, "CQ640D", "exclusion")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Course Metadata",
     ),
@@ -989,7 +1070,7 @@ COURSE_METADATA_TESTS = [
         turns=["What is UU400?"],
         check=lambda resp, at: (
             contains_any(resp, "Brantford")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Course Metadata",
     ),
@@ -998,7 +1079,7 @@ COURSE_METADATA_TESTS = [
         turns=["What is CS600?"],
         check=lambda resp, at: (
             contains_any(resp, "Communication Studies", "Graduate Seminar")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Course Metadata",
     ),
@@ -1032,7 +1113,7 @@ GRADUATE_PROGRAM_REQUIREMENTS_TESTS = [
     TestCase(
         name="Graceful fallback - course not required by MAC",
         turns=["Does the Master of Applied Computing require CP601?"],
-        check=lambda resp, at: is_graceful_fallback(resp),
+        check=lambda resp, at: is_graceful_fallback(resp, at),
         category="Graduate Program Requirements",
         metric="unsupported",
     ),
@@ -1088,7 +1169,7 @@ MULTI_TURN_CONVERSATION_TESTS = [
         ],
         check=lambda resp, at: (
             contains_any(resp, "Foley", "Ebrahimi")
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
             and not is_clarification_response(resp)
         ),
         category="Multi-Turn Conversations",
@@ -1125,7 +1206,7 @@ MULTI_TURN_CONVERSATION_TESTS = [
         check=lambda resp, at: (
             contains_any(resp, "Jeffery Jones", "Jones")
             and not is_clarification_response(resp)
-            and not is_off_topic_decline(resp)
+            and not is_off_topic_decline(resp, at)
         ),
         category="Multi-Turn Conversations",
     ),
@@ -1213,42 +1294,42 @@ OUT_OF_DOMAIN_TESTS = [
     TestCase(
         name="Sports question",
         turns=["Tell me about the latest Super Bowl champion."],
-        check=lambda resp, at: is_off_topic_decline(resp),
+        check=lambda resp, at: is_off_topic_decline(resp, at),
         category="Out-of-Domain Detection",
         metric="unsupported",
     ),
     TestCase(
         name="Celebrity / movie question",
         turns=["What's your favorite movie?"],
-        check=lambda resp, at: is_off_topic_decline(resp),
+        check=lambda resp, at: is_off_topic_decline(resp, at),
         category="Out-of-Domain Detection",
         metric="unsupported",
     ),
     TestCase(
         name="Coding question",
         turns=["Can you write a Python function to sort a list?"],
-        check=lambda resp, at: is_off_topic_decline(resp),
+        check=lambda resp, at: is_off_topic_decline(resp, at),
         category="Out-of-Domain Detection",
         metric="unsupported",
     ),
     TestCase(
         name="Politics question",
         turns=["Who is the president of the United States?"],
-        check=lambda resp, at: is_off_topic_decline(resp),
+        check=lambda resp, at: is_off_topic_decline(resp, at),
         category="Out-of-Domain Detection",
         metric="unsupported",
     ),
     TestCase(
         name="General knowledge question",
         turns=["What's the weather like today?"],
-        check=lambda resp, at: is_off_topic_decline(resp),
+        check=lambda resp, at: is_off_topic_decline(resp, at),
         category="Out-of-Domain Detection",
         metric="unsupported",
     ),
     TestCase(
         name="Control - in-domain tuition question should NOT be blocked",
         turns=["What is the tuition for graduate programs at WLU?"],
-        check=lambda resp, at: not is_off_topic_decline(resp),
+        check=lambda resp, at: not is_off_topic_decline(resp, at),
         category="Out-of-Domain Detection",
     ),
 ]
@@ -1326,8 +1407,8 @@ def run_test(test: TestCase) -> bool:
     print(f"Question: {test.turns[-1]}")
 
     try:
-        response = run_turns(test.turns)
-        passed = test.check(response, None)
+        response, response_type = run_turns(test.turns)
+        passed = test.check(response, response_type)
     except Exception as e:
         response = f"ERROR: {e}"
         passed = False

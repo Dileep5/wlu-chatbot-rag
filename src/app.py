@@ -13,7 +13,7 @@ from retriever import (
     create_memory,
 )
 from conversation import is_conversation
-from domain_guard import is_wlu_related
+from domain_guard import is_wlu_related, is_factual_offtopic
 from renderer import render_response
 import citation
 
@@ -389,6 +389,143 @@ Be friendly and conversational.
         .content
         .strip()
     )
+
+
+# The off-topic branch below (domain_guard.is_wlu_related() already
+# returned False) used to show one flat canned string, OFF_TOPIC_
+# MESSAGE, for every case - a genuine "what's the weather" question and
+# a "hey how are you" got the identical, un-reactive reply. These two
+# functions replace that with a second classification
+# (domain_guard.is_factual_offtopic()) deciding which of two warmer
+# paths to take. Deliberately kept SEPARATE from generate_chat_response()
+# above rather than extended in place - that function is also the
+# is_conversation() fast-path's generator (a fixed, already-regression-
+# tested list: "hi", "thanks", "tell me a joke", ...), and adding a
+# mandatory "pivot to WLU" instruction there would change its existing,
+# already-verified behavior for every one of those cases too. A new,
+# narrowly-scoped function avoids that risk entirely.
+def generate_offtopic_social_response(query):
+    """The user's message was classified as off-topic AND purely
+    social/emotional (domain_guard.is_factual_offtopic() returned
+    False) - e.g. "I'm bored today", "I feel like dancing". Reacts
+    genuinely to what they said, then pivots to offering WLU help.
+    Never states any fact about the outside world - there is nothing
+    to hallucinate here as long as the model only reacts to the user's
+    own stated feeling, never adds outside information of its own."""
+
+    api_key = os.getenv("OPENAI_API_KEY")
+
+    if not api_key:
+        return (
+            "Hey! I'm mainly here for Wilfrid Laurier University "
+            "questions, but feel free to chat. Anything about WLU "
+            "I can help with?"
+        )
+
+    client = OpenAI()
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "The user's message is purely social, emotional, or "
+                    "conversational (a greeting, small talk, or a "
+                    "statement about their own mood or feelings) - it is "
+                    "NOT a real question and contains no request for any "
+                    "fact or information.\n\n"
+                    "React warmly and genuinely to what they said - a "
+                    "brief, human reaction in your own words, one short "
+                    "sentence. Then, in a second short sentence, pivot to "
+                    "WLU - and that second sentence must make your scope "
+                    "clear, in your own natural words: that you're here "
+                    "specifically for Wilfrid Laurier University topics "
+                    "(e.g. 'I'm all about WLU', 'I'm here for WLU "
+                    "questions', 'my focus is WLU' - vary the exact "
+                    "phrasing naturally, but always include that idea), "
+                    "then invite a WLU question. Two short sentences "
+                    "total, no more.\n\n"
+                    "CRITICAL: never state any fact about the outside "
+                    "world - no weather, news, trivia, or any other "
+                    "real-world information, even in passing. Only react "
+                    "to what the user themselves said about their own "
+                    "feelings or greeting - never add outside content of "
+                    "your own."
+                )
+            },
+            {
+                "role": "user",
+                "content": query
+            }
+        ],
+        temperature=0.8,
+        max_tokens=100
+    )
+
+    return response.choices[0].message.content.strip()
+
+
+def generate_offtopic_decline(query):
+    """The user's message was classified as off-topic AND a genuine
+    factual request (domain_guard.is_factual_offtopic() returned True)
+    - e.g. "what's the weather", "who won the Super Bowl". Still
+    declines the actual fact - this function must NEVER attempt a real
+    answer to the question - but in warmer, more natural phrasing than
+    the old flat OFF_TOPIC_MESSAGE constant. The system prompt's
+    "CRITICAL RULES" section is the actual safety mechanism (tone is
+    free to vary, content is not); OFF_TOPIC_MESSAGE itself is kept as
+    the no-API-key fallback below, so a missing key still degrades to
+    the same safe, fixed decline as before rather than failing open."""
+
+    api_key = os.getenv("OPENAI_API_KEY")
+
+    if not api_key:
+        return OFF_TOPIC_MESSAGE
+
+    client = OpenAI()
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "The user asked a real question, but it is about "
+                    "something entirely unrelated to Wilfrid Laurier "
+                    "University (e.g. weather, general trivia, news, "
+                    "other schools, coding help, how-to instructions).\n\n"
+                    "CRITICAL RULES (never break these, regardless of "
+                    "tone):\n"
+                    "- Do NOT answer the actual question. Never state any "
+                    "real fact, number, date, name, or piece of "
+                    "information that would answer what they asked - not "
+                    "even a partial, approximate, hedged, or "
+                    "'as of my last update' answer.\n"
+                    "- Decline warmly and briefly in your own natural "
+                    "words - acknowledge you can't help with that "
+                    "specific thing, then make your scope clear (e.g. "
+                    "'I'm all about WLU', 'I'm here for WLU questions', "
+                    "'my focus is WLU' - vary the exact phrasing "
+                    "naturally, but always include that idea), then "
+                    "invite a WLU question instead. One or two short "
+                    "sentences total.\n"
+                    "- Never let a warmer, friendlier tone become an "
+                    "excuse to slip in a real answer - the decline must "
+                    "stay just as firm as a flat refusal, only phrased "
+                    "more naturally."
+                )
+            },
+            {
+                "role": "user",
+                "content": query
+            }
+        ],
+        temperature=0.7,
+        max_tokens=100
+    )
+
+    return response.choices[0].message.content.strip()
 
 
 # Response types that get a natural-language lead-in generated by
@@ -1269,15 +1406,30 @@ if query:
                 source = None
                 response_type = None
 
-        # out-of-domain (memory follow-ups always bypass this check)
+        # out-of-domain (memory follow-ups always bypass this check).
+        # A second, narrower classification decides HOW to respond -
+        # never WHETHER to (that's already decided: this branch only
+        # runs once is_wlu_related() has already said no). A purely
+        # social/emotional message (domain_guard.is_factual_offtopic()
+        # -> False) gets a warm, human reaction with no decline
+        # phrasing at all, since there's no fact being requested to
+        # decline. A genuine factual question about the outside world
+        # still gets declined - just in the LLM's own warmer words
+        # instead of the flat canned string - never a real answer to
+        # the actual question.
         elif (
             normalize_followup_text(query) not in FOLLOWUP_PHRASES
             and not is_wlu_related(query)
         ):
 
-            answer = OFF_TOPIC_MESSAGE
+            if is_factual_offtopic(query):
+                answer = generate_offtopic_decline(query)
+                response_type = "off_topic_decline"
+            else:
+                answer = generate_offtopic_social_response(query)
+                response_type = "off_topic_social"
+
             source = None
-            response_type = None
 
         # WLU retrieval
         else:
