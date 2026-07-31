@@ -1,5 +1,3 @@
-import re
-
 conversation_patterns = [
 
     "how are you",
@@ -29,18 +27,34 @@ conversation_patterns = [
     "can you help me"
 ]
 
-# Compiled once at module load time. Word-boundary matching (rather than
-# plain substring containment) so a short pattern like "hi" only matches
-# the standalone word/phrase, not incidentally inside unrelated words
-# ("machine", "which", "history") or real faculty names ("White",
-# "Okegbile") that happen to contain the same letters.
-_CONVERSATION_PATTERN = re.compile(
-    r"\b(?:" + "|".join(re.escape(p) for p in conversation_patterns) + r")\b"
-)
+# Trailing/leading punctuation a user might naturally type around one of
+# these short patterns ("Hi!", "thanks.", "  hey  ", "what can you do?")
+# - stripped before the exact-match check below so punctuation/whitespace
+# variation alone never defeats a genuine match.
+_CONVERSATION_TRIM_CHARS = " \t\n.,!?;:'\"-"
+
+_CONVERSATION_PATTERNS_SET = set(conversation_patterns)
 
 
 def is_conversation(question):
+    """True only when the message, once lowercased and trimmed of
+    surrounding whitespace/punctuation, IS one of conversation_patterns
+    outright - not merely CONTAINS one as a substring anywhere.
 
-    question = question.lower().strip()
+    Previously used a \\b(?:pattern1|pattern2|...)\\b regex .search(),
+    which matches a short pattern ("hey", "hi", "thanks", "ok", ...)
+    wherever it appears as a standalone word in the message - including
+    as just the first word of an otherwise real, substantial WLU
+    question. Confirmed live: "hey can u help me pick electives for
+    winter term" matched via the leading "hey" and was routed entirely
+    to generate_chat_response() (ungrounded LLM chat, no retrieval, no
+    citation) instead of ever reaching hybrid_search(), even though the
+    rest of the message is a genuine question. An exact-match check
+    after trimming keeps every short-form case working identically
+    ("hi", "hey", "thanks", "what can you do", ... alone still match)
+    while correctly rejecting any message that merely starts or ends
+    with one of these phrases but carries real additional content."""
 
-    return bool(_CONVERSATION_PATTERN.search(question))
+    normalized = question.lower().strip(_CONVERSATION_TRIM_CHARS)
+
+    return normalized in _CONVERSATION_PATTERNS_SET

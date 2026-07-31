@@ -33,7 +33,14 @@ IN_DOMAIN_KEYWORDS = [
     "co-op",
     "thesis",
     "registrar",
-    "international students",
+    # Singular, not "international students" (plural) - a plain
+    # substring check means the singular form also matches the plural
+    # ("international student" is itself a substring of "international
+    # students"), so this one entry covers both phrasings. Confirmed
+    # live: "international students" alone missed "im an international
+    # student, do i need to renew my study permit" purely because the
+    # user's message had no trailing "s".
+    "international student",
     "enrolment",
     "enrollment",
     # Campus services / student services / FAQ (Phase 2 corpus expansion
@@ -69,6 +76,15 @@ IN_DOMAIN_KEYWORDS = [
     "diversity",
     "equity",
     "immigration",
+    # International-student immigration topics specifically (Phase 2's
+    # corpus does cover this - only the keyword list was missing these
+    # phrasings). Confirmed live: "do i need to renew my study permit"
+    # matched none of the existing keywords (not even "immigration",
+    # since the phrase never uses that word) and fell through to the
+    # LLM classifier, which also misjudged it as off-topic.
+    "study permit",
+    "immigration status",
+    "visa",
     "sustainability",
     "tech services",
     "policy",

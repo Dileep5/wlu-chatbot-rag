@@ -138,7 +138,17 @@ def get_last_response_text(at: AppTest) -> str:
     last = at.chat_message[-1]
 
     if len(last.markdown) > 0:
-        return last.markdown[0].value
+        # A course/faculty_profile/program/department_profile response
+        # now renders as TWO separate st.markdown() calls - a natural-
+        # language summary (generate_grounded_summary(), app.py) above
+        # the labeled-field card - instead of one, since the summary is
+        # deliberately kept out of the card's own markdown so renderer.py's
+        # _extract_labeled_field() parser never sees it. A real user in
+        # the browser sees both blocks together, so the harness has to
+        # join all of them, not just the first - reading only markdown[0]
+        # silently dropped the entire card (every labeled field) for
+        # these four response types the moment this feature shipped.
+        return "\n\n".join(m.value for m in last.markdown)
 
     # Bot hit its except-block and rendered via st.error() this run.
     try:
