@@ -1,5 +1,6 @@
 import os
 import re
+import traceback
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -1954,9 +1955,14 @@ if query:
         # Production polish: the user sees a friendly, generic message -
         # raw exception text (e.g. "'NoneType' object has no attribute
         # ...") is confusing and leaks implementation detail. The real
-        # exception is still printed to the console for whoever's
-        # running the app, unchanged in substance from before.
+        # exception (with full traceback, not just str(e)) is still
+        # printed to the console for whoever's running the app - str(e)
+        # alone previously hid exactly which line/call raised, which is
+        # what made a real production incident (an exhausted OpenAI
+        # account balance) take real investigation to pin down instead
+        # of being obvious from console output.
         print(f"Unhandled error while answering {query!r}: {e}")
+        traceback.print_exc()
 
         error_msg = (
             "Sorry, something went wrong while answering that. "
