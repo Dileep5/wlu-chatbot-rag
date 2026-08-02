@@ -1348,9 +1348,24 @@ def _render_followup(followup):
         st.caption(followup)
 
 
-def render_response(response_type, answer, source, summary=None, followup=None):
+def render_response(
+    response_type, answer, source, summary=None, followup=None, show_card=True
+):
+    """show_card=False (app.py's answer-first, card-on-request redesign -
+    only ever passed False for the four dense entity-profile types:
+    course/faculty_profile/program/department_profile) shows just the
+    grounded summary on its own, skipping straight to _render_followup()
+    below without ever calling the matching render_X() - the "Want the
+    full details?" prompt app.py already put in `followup` for this
+    case is what invites the follow-up that shows the full card next
+    turn. Every other response_type always passes show_card=True
+    (app.py's contract, not enforced here), so this never affects
+    anything besides those four types."""
 
-    if response_type in _COURSE_RESPONSE_TYPES:
+    if not show_card:
+        _render_summary(summary)
+
+    elif response_type in _COURSE_RESPONSE_TYPES:
         render_course(answer, source, summary)
 
     elif response_type in _FACULTY_RESPONSE_TYPES:

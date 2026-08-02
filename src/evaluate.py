@@ -928,8 +928,25 @@ DEPARTMENT_COORDINATOR_TESTS = [
 # <Field>: Y" answer instead of the entire profile (production-polish
 # fix, generalizes the same reusable mechanism the coordinator fact
 # lookup already used). Real, verified contact data (Dr. Shohini Ghose).
-# Pass criteria: each fact question returns exactly that fact; a plain
-# "who is X" question is unaffected and still returns the full profile.
+# Pass criteria: each fact question returns exactly that fact.
+#
+# The fourth test's own guarantee changed with the answer-first, card-
+# on-request redesign (app.py): "faculty_profile" is now one of the
+# four response types that leads with just the grounded summary on a
+# first ask, full profile card on request - "who is X" no longer
+# "still returns the full profile" on the FIRST turn the way it used
+# to (confirmed live: it still incidentally mentions "Professor"/
+# "Faculty of Science" in the summary prose, so the single-turn version
+# of this check kept passing even though it had stopped actually
+# testing what its name claimed). What the test protects against is
+# still real and still worth protecting: a plain "who is X" question
+# must never be mistaken for one of the specific-fact lookups above
+# (which would show a bare "Name: X / Email: Y" instead of a real
+# summary) - now verified across both turns instead of one, so the
+# assertion stays true to what actually happens: turn 1 is a real
+# summary (not the truncated one-field fact-lookup shape), and "tell
+# me more" (already in FOLLOWUP_PHRASES) still reaches the full profile
+# exactly as before.
 FACULTY_CONTACT_FACT_TESTS = [
     TestCase(
         name="Faculty email fact lookup",
@@ -950,9 +967,18 @@ FACULTY_CONTACT_FACT_TESTS = [
         category="Faculty Contact Facts",
     ),
     TestCase(
-        name="Non-fact faculty question unaffected (full profile still shown)",
+        name="Non-fact faculty question unaffected (summary, then full profile on request)",
         turns=["Who is Shohini Ghose?"],
-        check=lambda resp, at: contains_any(resp, "Professor", "Faculty of Science"),
+        check=lambda resp, at: (
+            contains_any(resp, "Professor", "Faculty of Science")
+            and not contains_all(resp, "Name:", "Email:")
+        ),
+        category="Faculty Contact Facts",
+    ),
+    TestCase(
+        name="Non-fact faculty question, full profile via follow-up",
+        turns=["Who is Shohini Ghose?", "tell me more"],
+        check=lambda resp, at: contains_any(resp, "sghose@wlu.ca"),
         category="Faculty Contact Facts",
     ),
 ]
@@ -1057,8 +1083,16 @@ COURSE_PREREQUISITE_TESTS = [
 # still answers normally (no regression to existing behavior).
 COURSE_METADATA_TESTS = [
     TestCase(
+        # Answer-first, card-on-request redesign (app.py): "course" is
+        # now one of the four response types that leads with just the
+        # grounded summary on a first ask, with the full metadata-field
+        # card shown only once asked for - "tell me more" (already in
+        # FOLLOWUP_PHRASES) is exactly that ask, so the second turn
+        # below is what now carries this test's real assertion (that
+        # exclusions/location actually make it onto the card, unchanged
+        # from before the redesign), not the first.
         name="Exclusions surfaced in a real answer (CQ609)",
-        turns=["What is CQ609?"],
+        turns=["What is CQ609?", "tell me more"],
         check=lambda resp, at: (
             contains_any(resp, "CQ640D", "exclusion")
             and not is_off_topic_decline(resp, at)
@@ -1067,7 +1101,7 @@ COURSE_METADATA_TESTS = [
     ),
     TestCase(
         name="Location surfaced in a real answer (UU400)",
-        turns=["What is UU400?"],
+        turns=["What is UU400?", "tell me more"],
         check=lambda resp, at: (
             contains_any(resp, "Brantford")
             and not is_off_topic_decline(resp, at)

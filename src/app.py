@@ -696,6 +696,51 @@ FOLLOWUP_SUGGESTIONS = {
 }
 
 
+# Answer-first, card-on-request redesign: these four response types are
+# the full ENTITY-PROFILE cards (a whole course/person/program/
+# department's worth of fields at once) - the ones dense enough that
+# leading with the short grounded summary, then only expanding to the
+# full card on request, is worth the extra turn. Deliberately narrower
+# than _COURSE_RESPONSE_TYPES/_PROGRAM_RESPONSE_TYPES (renderer.py):
+# "prerequisite"/"course_instructors"/"coordinator"/"undergraduate_
+# requirements"/"faculty_list"/... are already narrow, single-fact or
+# list-shaped answers, not a dense multi-field profile, so they keep
+# rendering immediately exactly as before.
+_CARD_ON_REQUEST_TYPES = {
+    "course",
+    "faculty_profile",
+    "program",
+    "department_profile",
+}
+
+# Exception to the above: a question that was already broad/open-ended
+# shows the full card immediately - asking "want the full details?"
+# right after someone explicitly asked for everything would be an
+# annoying extra round trip, not a helpful pause. Deliberately matched
+# against the phrase alone, not tied to any specific response_type,
+# since the same phrasing works regardless of which of the four types
+# ends up answering it.
+_BROAD_DETAIL_REQUEST_PATTERN = re.compile(
+    r"\beverything\b|\ball\s+(?:the\s+)?details\b|\bfull\s+details\b|"
+    r"\bcomplete\s+details\b|\bfull\s+information\b|\bin\s+detail\b|"
+    r"\bin-depth\b|\bcomprehensive\b|\ball\s+about\b|\bfull\s+profile\b",
+    re.IGNORECASE
+)
+
+# The natural ways someone responds to "Want the full details?" (e.g.
+# "show me", "yes please") are added directly to FOLLOWUP_PHRASES
+# itself (retriever.py), not a separate list here - structured_search()'s
+# own FOLLOWUP MEMORY block re-resolves any FOLLOWUP_PHRASES member
+# against the most recently established entity and re-runs the full
+# structured lookup for it, which is exactly "fetch this entity's full
+# details again". A bare "show me" names no entity of its own, so
+# without that shared rewrite it would never resolve to anything -
+# checking a locally-defined phrase set here, without also teaching
+# retriever.py's rewrite the same phrases, would make this condition
+# true while structured_search() had already failed to produce a
+# course/faculty_profile/program/department_profile result at all.
+
+
 # -----------------------------
 # Custom CSS (Phase 17: visual redesign only - no widget behavior,
 # routing, memory, prompting, or rendering logic below this point is
@@ -1712,6 +1757,11 @@ for msg in st.session_state.messages:
                 msg.get("source"),
                 msg.get("summary"),
                 msg.get("followup"),
+                # Defaults True for messages stored before this field
+                # existed - a card that was already shown once, in an
+                # older session, must keep being shown on replay, never
+                # retroactively hidden.
+                msg.get("show_card", True),
             )
 
 
@@ -1934,12 +1984,47 @@ if query:
             response_type
         )
 
+        # Answer-first, card-on-request (see _CARD_ON_REQUEST_TYPES'
+        # own comment): the full card is withheld in favor of just the
+        # summary, unless the ORIGINAL question was already broad/open-
+        # ended (_BROAD_DETAIL_REQUEST_PATTERN) or was itself a follow-
+        # up asking for more (the existing FOLLOWUP_PHRASES mechanism,
+        # retriever.py, extended with a few "yes, show me" phrasings) -
+        # in either case structured_search() has already re-resolved the
+        # query against the established entity and this IS the user
+        # asking to see it. Never withheld when summary itself is falsy
+        # (missing API key, or the summary call failed) - showing
+        # nothing at all would be a broken response, not a lightweight
+        # one.
+        show_card = True
+
+        if response_type in _CARD_ON_REQUEST_TYPES and summary:
+
+            normalized_query = normalize_followup_text(query)
+
+            is_broad_request = bool(
+                _BROAD_DETAIL_REQUEST_PATTERN.search(query)
+            )
+            is_detail_followup = normalized_query in FOLLOWUP_PHRASES
+
+            show_card = is_broad_request or is_detail_followup
+
         # Same "computed once, at message-creation time" reasoning as
         # `summary` immediately above - a fixed dict lookup, not an API
         # call, but still stored on the message rather than recomputed
         # by the history-replay loop so a response_type's mapping only
-        # ever needs to be looked up once per turn.
-        followup = FOLLOWUP_SUGGESTIONS.get(response_type) if response_type else None
+        # ever needs to be looked up once per turn. Overridden with a
+        # lightweight "want the full details?" prompt whenever the card
+        # itself is being withheld - the deeper FOLLOWUP_SUGGESTIONS
+        # hint (e.g. "want to know who's coordinating this program?")
+        # would be premature before the user has even seen the card it
+        # refers to.
+        if not show_card:
+            followup = 'Want the full details? Just ask - "tell me more" works.'
+        else:
+            followup = (
+                FOLLOWUP_SUGGESTIONS.get(response_type) if response_type else None
+            )
 
         loading_placeholder.empty()
 
@@ -1953,7 +2038,8 @@ if query:
                 answer,
                 source,
                 summary,
-                followup
+                followup,
+                show_card
             )
 
         st.session_state.messages.append(
@@ -1963,7 +2049,8 @@ if query:
                 "source": source,
                 "response_type": response_type,
                 "summary": summary,
-                "followup": followup
+                "followup": followup,
+                "show_card": show_card
             }
         )
 
