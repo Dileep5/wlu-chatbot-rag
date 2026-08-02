@@ -13,6 +13,14 @@ from retriever import (
     FOLLOWUP_PHRASES,
     normalize_followup_text,
     create_memory,
+    # Internal helpers (underscore-prefixed, deliberately imported
+    # anyway) reused directly by the button-driven follow-up actions
+    # below - each is already a pure, deterministic memory lookup with
+    # no free-text pattern matching inside it, exactly the existing
+    # logic the buttons need to call directly rather than re-implement.
+    _attempt_coordinator_resolution,
+    _attempt_ordinal_resolution,
+    _latest_entity_of_type,
 )
 from conversation import is_conversation
 from domain_guard import is_wlu_related, is_factual_offtopic
@@ -641,59 +649,188 @@ def generate_grounded_summary(query, context, response_type):
         return None
 
 
-# Bounded, capability-real follow-up hints shown under certain
-# response_types (Google-AI-Mode-style "Would you like to know X?").
-# Deliberately a fixed dict, never LLM-generated: an LLM asked to
-# "suggest a natural follow-up" has no way to know which follow-up
-# phrasings this app's own deterministic routing (resolve_contextual_
-# reference/structured_search, retriever.py) can actually resolve, so a
-# free-generated suggestion risks promising a capability that doesn't
-# exist - exactly the failure mode this dict exists to avoid.
+# Bounded, capability-real follow-up ACTIONS shown as real buttons under
+# certain response_types (Google-AI-Mode-style "Would you like to know
+# X?", but clicking one directly triggers the deterministic action - no
+# free-text reinterpretation involved at all). Deliberately a fixed
+# dict, never LLM-generated: an LLM asked to "suggest a natural
+# follow-up" has no way to know which follow-up capabilities this app's
+# own deterministic routing (resolve_contextual_reference/
+# structured_search, retriever.py) can actually resolve, so a free-
+# generated suggestion risks promising a capability that doesn't exist
+# - exactly the failure mode this dict exists to avoid.
 #
-# Every phrasing below was verified LIVE against the real routing
-# (structured_search() to establish the entity in memory, then
-# resolve_contextual_reference() on the suggested follow-up text
-# itself) before being added - not assumed from the response_type's
-# name or from what "should" work:
-#   - "prerequisites"/"who teaches it" resolve via _INTENT_REWRITE_
-#     RULES's course-typed rewrite rules.
-#   - "who coordinates it/their department" resolves via _COORDINATOR_
-#     REWRITE_PATTERN/_attempt_coordinator_resolution against whichever
-#     of program/department/(a faculty member's own department) was
-#     most recently established.
-#   - "tell me about the first one" resolves via _resolve_ordinal_
-#     entity() against memory["_last_list_id"], written by every list-
-#     shaped structured branch (_record_entity_list()) - confirmed
-#     directly for course_instructors/research and, since faculty_list/
-#     department_faculty_list share that exact same recording call,
-#     true for them too.
-# A response_type with no verified-safe follow-up (coordinator, policy,
-# and anything not listed) is simply absent - no line is shown, rather
-# than guessing at one that might not resolve.
+# Each action string names a case _resolve_button_action() (below)
+# knows how to execute directly against the CAPTURED entity context
+# (app.py's _capture_followup_context(), stored per-message as
+# "followup_context") - never against "whatever is currently in
+# memory", so a button on an older message still acts on the entity
+# THAT message was actually about, even if the conversation has since
+# moved on to a different course/program/department. Two response
+# types map to a LIST of two buttons (course/course_instructors) since
+# the old single free-text hint offered an either/or choice a single
+# click can't represent - split into two independent, individually
+# clickable actions instead:
+#   - "prerequisites"/"instructors" build the exact same fixed question
+#     template _INTENT_REWRITE_RULES (retriever.py) already rewrites
+#     free text into, substituting the captured course code directly,
+#     then call structured_search() with it - the same deterministic
+#     function the free-text path calls, just without needing to first
+#     detect that "prerequisites"/"who teaches" was what was meant.
+#   - "coordinator" calls retriever._attempt_coordinator_resolution()
+#     directly - already a pure, deterministic memory-lookup with no
+#     free-text pattern matching inside it at all.
+#   - "first_in_list" calls retriever._attempt_ordinal_resolution()
+#     directly, same reasoning.
+# A response_type with no verified-safe follow-up (policy, and anything
+# not listed) is simply absent - no button is shown, rather than
+# guessing at one that might not resolve.
 FOLLOWUP_SUGGESTIONS = {
-    "course": "Curious about the prerequisites, or who's teaching it this year?",
-    "prerequisite": "Want to know who's teaching it these days?",
-    "course_instructors": (
-        'Curious what you need to take first, or want to know more about '
-        'one of them? Try "Tell me about the first one."'
-    ),
-    "faculty_profile": "Curious who coordinates their department?",
-    "program": "Want to know who's coordinating this program?",
-    "undergraduate_requirements": "Curious who coordinates this program?",
-    "graduate_requirements": "Curious who coordinates this program?",
-    "department_profile": "Want to know who coordinates this department?",
-    "faculty_list": (
-        'Any of them catch your eye? Try "Tell me about the first one" '
-        'and I\'ll dig in.'
-    ),
-    "department_faculty_list": (
-        'Want the scoop on one of them? Try "Tell me about the first one."'
-    ),
-    "research": (
-        'Want to hear more about any of them? Try "Tell me about the '
-        'first one" and I\'ll fill you in.'
-    ),
+    "course": [
+        {"label": "Show prerequisites", "action": "prerequisites"},
+        {"label": "Who's teaching it?", "action": "instructors"},
+    ],
+    "prerequisite": [
+        {"label": "Who's teaching it?", "action": "instructors"},
+    ],
+    "course_instructors": [
+        {"label": "Show prerequisites", "action": "prerequisites"},
+        {"label": "Tell me about the first one", "action": "first_in_list"},
+    ],
+    "faculty_profile": [
+        {"label": "Who coordinates their department?", "action": "coordinator"},
+    ],
+    "program": [
+        {"label": "Who's coordinating this program?", "action": "coordinator"},
+    ],
+    "undergraduate_requirements": [
+        {"label": "Who coordinates this program?", "action": "coordinator"},
+    ],
+    "graduate_requirements": [
+        {"label": "Who coordinates this program?", "action": "coordinator"},
+    ],
+    "department_profile": [
+        {"label": "Who coordinates this department?", "action": "coordinator"},
+    ],
+    "faculty_list": [
+        {"label": "Tell me about the first one", "action": "first_in_list"},
+    ],
+    "department_faculty_list": [
+        {"label": "Tell me about the first one", "action": "first_in_list"},
+    ],
+    "research": [
+        {"label": "Tell me about the first one", "action": "first_in_list"},
+    ],
 }
+
+
+def _capture_followup_context(memory):
+    """Snapshots the entity identifiers a follow-up BUTTON might need,
+    immediately after generating an answer - not "whatever's in memory
+    whenever the button eventually gets clicked", which could be a
+    different course/program/department entirely by then if the
+    conversation has since moved on. Captures all three regardless of
+    which one the current response_type's buttons actually need (extra
+    unused fields are harmless) - simpler than threading response_type-
+    specific logic through here, and keeps this function usable
+    unchanged if a future response_type needs a different combination.
+
+    coordinator_target/list_id still resolve against CURRENT memory
+    when their button is actually clicked (via retriever._attempt_
+    coordinator_resolution()/_attempt_ordinal_resolution(), unchanged
+    from the free-text path) rather than a snapshotted value - matching
+    today's free-text "who coordinates it?"/"tell me about the first
+    one" behavior exactly, including its same pre-existing staleness
+    edge case (asking about a much older topic after the conversation
+    has moved on). course_code is the one identifier captured and used
+    directly instead, since "prerequisites"/"instructors" are clearly
+    about the one specific course the button's own message was about,
+    not whatever course happens to be most recent by the time it's
+    clicked.
+
+    Reads entity_id, not _resolve_typed_value()'s display_name -
+    confirmed live that a course's display_name is the decorated
+    "CP312 - Algorithm Design and Analysis I" form (search_course(),
+    retriever.py, records it that way for the pronoun-substitution case
+    _resolve_typed_value() is normally used for), not the bare code a
+    "What are the prerequisites for {course_code}?" template needs.
+    entity_id is the bare code for courses specifically."""
+
+    course_entry = _latest_entity_of_type(memory, "course")
+
+    return {
+        "course_code": course_entry["entity_id"] if course_entry else None,
+    }
+
+
+def _resolve_button_action(action, followup_context, memory):
+    """Executes a follow-up button's action directly - no free-text
+    question is ever constructed from user input and reinterpreted;
+    the only "question" text built here is a fixed, known-good template
+    with a captured entity identifier substituted in, immediately
+    passed to the same deterministic structured_search() the free-text
+    path already calls, or a private retriever.py resolver called
+    directly. Returns (query_label, context, source, response_type) on
+    success, or None if the captured context is missing or the
+    resolution attempt fails (e.g. the entity was since removed from
+    the corpus) - the caller falls back to a graceful clarification
+    message in that case, never a silent no-op."""
+
+    if action == "prerequisites":
+
+        course_code = followup_context.get("course_code")
+
+        if not course_code:
+            return None
+
+        question = f"What are the prerequisites for {course_code}?"
+        result = structured_search(question, memory)
+
+        if not result:
+            return None
+
+        context, source, response_type = result
+        return question, context, source, response_type
+
+    if action == "instructors":
+
+        course_code = followup_context.get("course_code")
+
+        if not course_code:
+            return None
+
+        question = f"Who has taught {course_code}?"
+        result = structured_search(question, memory)
+
+        if not result:
+            return None
+
+        context, source, response_type = result
+        return question, context, source, response_type
+
+    if action == "coordinator":
+
+        outcome = _attempt_coordinator_resolution(memory)
+
+        if outcome[0] != "resolved":
+            return None
+
+        _, context, source, response_type = outcome
+        return "Who's coordinating this?", context, source, response_type
+
+    if action == "first_in_list":
+
+        outcome = _attempt_ordinal_resolution(
+            "Tell me about the first one.", "first", memory
+        )
+
+        if outcome[0] != "resolved":
+            return None
+
+        _, context, source, response_type = outcome
+        return "Tell me about the first one.", context, source, response_type
+
+    return None
 
 
 # Answer-first, card-on-request redesign: these four response types are
@@ -739,6 +876,162 @@ _BROAD_DETAIL_REQUEST_PATTERN = re.compile(
 # retriever.py's rewrite the same phrases, would make this condition
 # true while structured_search() had already failed to produce a
 # course/faculty_profile/program/department_profile result at all.
+# Still available as a fallback for anyone who types "tell me more"
+# unprompted, with no button context at all - only removed as the
+# PRIMARY path once a button already covers the same action.
+
+
+def _finalize_response(query, answer, source, response_type, memory):
+    """Everything from citation enrichment through message storage,
+    once answer/source/response_type are already known - shared by both
+    the free-text turn (structured_search()/resolve_contextual_
+    reference()/hybrid_search(), below) and button-driven follow-up
+    actions (_resolve_button_action() above), which differ only in HOW
+    they arrived at those three values, never in what happens once they
+    have them. Does not render anything itself - callers render inside
+    their own st.chat_message(...) block, since the live free-text path
+    also needs to clear its loading placeholder first, which a button
+    click never has. Returns the message dict that was appended to
+    st.session_state.messages, so a caller that needs it (none do
+    today) could inspect it further."""
+
+    source = citation.build_citation(source, response_type, answer)
+
+    summary = generate_grounded_summary(
+        query,
+        answer,
+        response_type
+    )
+
+    show_card = True
+
+    if response_type in _CARD_ON_REQUEST_TYPES and summary:
+
+        normalized_query = normalize_followup_text(query)
+
+        is_broad_request = bool(
+            _BROAD_DETAIL_REQUEST_PATTERN.search(query)
+        )
+        is_detail_followup = normalized_query in FOLLOWUP_PHRASES
+
+        show_card = is_broad_request or is_detail_followup
+
+    # followup is always either None or a list of {"label", "action"}
+    # button specs now - "reveal_card" is a special action
+    # _render_followup_buttons() below handles in place (flips this
+    # same message's show_card rather than creating a new Q&A pair),
+    # never routed through _resolve_button_action().
+    if not show_card:
+        followup = [{"label": "Show full details", "action": "reveal_card"}]
+    else:
+        followup = (
+            FOLLOWUP_SUGGESTIONS.get(response_type) if response_type else None
+        )
+
+    followup_context = _capture_followup_context(memory) if followup else None
+
+    message = {
+        "role": "assistant",
+        "content": answer,
+        "source": source,
+        "response_type": response_type,
+        "summary": summary,
+        "followup": followup,
+        "followup_context": followup_context,
+        "show_card": show_card
+    }
+
+    st.session_state.messages.append(message)
+
+    st.session_state.chat_history.append(
+        {
+            "role": "assistant",
+            "content": answer
+        }
+    )
+
+    return message
+
+
+def _render_followup_buttons(message_index, message):
+    """Renders each follow-up action (or the answer-first redesign's
+    "show full details" prompt) as a real button - clicking one
+    directly triggers its mapped deterministic action and updates
+    conversation state in place, with no free-text reinterpretation
+    involved anywhere in this path. Unique key per (message, action)
+    pair so multiple messages' buttons - and the two buttons "course"/
+    "course_instructors" map to - never collide; message_index is
+    stable across reruns since messages are only ever appended, never
+    reordered or removed."""
+
+    followup = message.get("followup")
+
+    if not followup:
+        return
+
+    for action_index, suggestion in enumerate(followup):
+
+        button_key = f"followup-{message_index}-{action_index}"
+
+        if not st.button(suggestion["label"], key=button_key):
+            continue
+
+        if suggestion["action"] == "reveal_card":
+            message["show_card"] = True
+            st.rerun()
+            return
+
+        followup_context = message.get("followup_context") or {}
+
+        resolved = _resolve_button_action(
+            suggestion["action"], followup_context, st.session_state.memory
+        )
+
+        if not resolved:
+
+            st.session_state.messages.append(
+                {
+                    "role": "assistant",
+                    "content": (
+                        "Sorry, I couldn't look that up right now. "
+                        "Feel free to ask directly instead."
+                    ),
+                    "source": None,
+                    "response_type": None,
+                    "summary": None,
+                    "followup": None,
+                    "followup_context": None,
+                    "show_card": True
+                }
+            )
+            st.rerun()
+            return
+
+        query_label, context, source, response_type = resolved
+
+        answer = generate_answer(query_label, context, response_type)
+
+        st.session_state.messages.append(
+            {
+                "role": "user",
+                "content": query_label
+            }
+        )
+
+        st.session_state.chat_history.append(
+            {
+                "role": "user",
+                "content": query_label
+            }
+        )
+
+        _finalize_response(
+            query_label, answer, source, response_type,
+            st.session_state.memory
+        )
+
+        st.rerun()
+        return
 
 
 # -----------------------------
@@ -1730,7 +2023,7 @@ if show_suggestions:
 # Display Previous Messages
 # -----------------------------
 
-for msg in st.session_state.messages:
+for _message_index, msg in enumerate(st.session_state.messages):
 
     with st.chat_message(
         msg["role"],
@@ -1756,13 +2049,14 @@ for msg in st.session_state.messages:
                 msg["content"],
                 msg.get("source"),
                 msg.get("summary"),
-                msg.get("followup"),
                 # Defaults True for messages stored before this field
                 # existed - a card that was already shown once, in an
                 # older session, must keep being shown on replay, never
                 # retroactively hidden.
                 msg.get("show_card", True),
             )
+
+            _render_followup_buttons(_message_index, msg)
 
 
 # -----------------------------
@@ -1951,80 +2245,15 @@ if query:
                 )
             )
 
-        # Phase 3: enriches whatever `source` each branch above already
-        # decided on (a bare URL string, or None for non-factual
-        # replies) into {"date", "sources": [{"title", "url"}, ...]} -
-        # purely a presentation step, run after every retrieval/routing
-        # decision above is already final. Stored in this enriched form
-        # so the history-replay loop below re-renders it identically
-        # without repeating any lookup.
-        #
-        # answer_text is passed through so build_citation() can suppress
-        # the citation if the answer itself indicates the retrieved
-        # source doesn't actually address the question - never shown as
-        # if it were authoritative just because retrieval returned
-        # something (confirmed live: a vector-grounded answer for
-        # "course work?" cited an unrelated academic-misconduct policy
-        # page). Harmless to pass for every response_type: deterministic
-        # types never contain this kind of hedging language to begin
-        # with, so the check is simply a no-op for them.
-        source = citation.build_citation(source, response_type, answer)
-
-        # Generated exactly once here, at message-creation time - never
-        # in the history-replay loop above, which re-runs on every
-        # Streamlit rerun and would otherwise re-call the LLM (wastefully,
-        # and non-deterministically) for every past message on every
-        # interaction. Stored in the message dict below and simply
-        # replayed from there afterward, satisfying "only the first time
-        # a card is shown" by construction rather than needing its own
-        # check.
-        summary = generate_grounded_summary(
-            query,
-            answer,
-            response_type
+        # Everything from citation enrichment through message storage is
+        # shared with the button-driven follow-up path
+        # (_render_followup_buttons(), _finalize_response() - both
+        # defined above, near FOLLOWUP_SUGGESTIONS) - see that
+        # function's own comment for why passing `answer` through as
+        # answer_text matters for citation suppression.
+        message = _finalize_response(
+            query, answer, source, response_type, st.session_state.memory
         )
-
-        # Answer-first, card-on-request (see _CARD_ON_REQUEST_TYPES'
-        # own comment): the full card is withheld in favor of just the
-        # summary, unless the ORIGINAL question was already broad/open-
-        # ended (_BROAD_DETAIL_REQUEST_PATTERN) or was itself a follow-
-        # up asking for more (the existing FOLLOWUP_PHRASES mechanism,
-        # retriever.py, extended with a few "yes, show me" phrasings) -
-        # in either case structured_search() has already re-resolved the
-        # query against the established entity and this IS the user
-        # asking to see it. Never withheld when summary itself is falsy
-        # (missing API key, or the summary call failed) - showing
-        # nothing at all would be a broken response, not a lightweight
-        # one.
-        show_card = True
-
-        if response_type in _CARD_ON_REQUEST_TYPES and summary:
-
-            normalized_query = normalize_followup_text(query)
-
-            is_broad_request = bool(
-                _BROAD_DETAIL_REQUEST_PATTERN.search(query)
-            )
-            is_detail_followup = normalized_query in FOLLOWUP_PHRASES
-
-            show_card = is_broad_request or is_detail_followup
-
-        # Same "computed once, at message-creation time" reasoning as
-        # `summary` immediately above - a fixed dict lookup, not an API
-        # call, but still stored on the message rather than recomputed
-        # by the history-replay loop so a response_type's mapping only
-        # ever needs to be looked up once per turn. Overridden with a
-        # lightweight "want the full details?" prompt whenever the card
-        # itself is being withheld - the deeper FOLLOWUP_SUGGESTIONS
-        # hint (e.g. "want to know who's coordinating this program?")
-        # would be premature before the user has even seen the card it
-        # refers to.
-        if not show_card:
-            followup = 'Want the full details? Just ask - "tell me more" works.'
-        else:
-            followup = (
-                FOLLOWUP_SUGGESTIONS.get(response_type) if response_type else None
-            )
 
         loading_placeholder.empty()
 
@@ -2034,32 +2263,16 @@ if query:
         ):
 
             render_response(
-                response_type,
-                answer,
-                source,
-                summary,
-                followup,
-                show_card
+                message["response_type"],
+                message["content"],
+                message["source"],
+                message["summary"],
+                message["show_card"]
             )
 
-        st.session_state.messages.append(
-            {
-                "role": "assistant",
-                "content": answer,
-                "source": source,
-                "response_type": response_type,
-                "summary": summary,
-                "followup": followup,
-                "show_card": show_card
-            }
-        )
-
-        st.session_state.chat_history.append(
-            {
-                "role": "assistant",
-                "content": answer
-            }
-        )
+            _render_followup_buttons(
+                len(st.session_state.messages) - 1, message
+            )
 
     except Exception as e:
 

@@ -1331,36 +1331,25 @@ def render_generic(answer, source, summary=None):
         _render_source(source)
 
 
-def _render_followup(followup):
-    """The short, templated "Want to know X?" hint line FOLLOWUP_
-    SUGGESTIONS (app.py) maps certain response_types to - rendered as
-    plain small text via st.caption(), not a button, per the task's
-    "keep it simple text for now" instruction. A no-op whenever
-    followup is falsy, exactly like _render_summary() above, so every
-    response_type without a mapped suggestion (or an older stored
-    message from before this feature existed) renders unchanged.
-    Deliberately rendered once here, after every render_X() branch
-    below, rather than threaded into each of them individually - it
-    always belongs at the very end of a response regardless of which
-    card/fallback shape was used above it."""
-
-    if followup:
-        st.caption(followup)
-
-
 def render_response(
-    response_type, answer, source, summary=None, followup=None, show_card=True
+    response_type, answer, source, summary=None, show_card=True
 ):
     """show_card=False (app.py's answer-first, card-on-request redesign -
     only ever passed False for the four dense entity-profile types:
     course/faculty_profile/program/department_profile) shows just the
-    grounded summary on its own, skipping straight to _render_followup()
-    below without ever calling the matching render_X() - the "Want the
-    full details?" prompt app.py already put in `followup` for this
-    case is what invites the follow-up that shows the full card next
-    turn. Every other response_type always passes show_card=True
-    (app.py's contract, not enforced here), so this never affects
-    anything besides those four types."""
+    grounded summary on its own, skipping the matching render_X() call
+    entirely - app.py renders a "Show full details" BUTTON immediately
+    after calling this function, which is what shows the full card next
+    turn if clicked. Every other response_type always passes
+    show_card=True (app.py's contract, not enforced here), so this
+    never affects anything besides those four types.
+
+    Follow-up suggestions (FOLLOWUP_SUGGESTIONS, app.py) are no longer
+    rendered here at all - they're real st.button()s now, which need
+    direct access to st.session_state/st.rerun() to handle a click, so
+    app.py renders them itself immediately after calling this function
+    rather than this module reaching into session state (this module
+    stays presentation-only, same as before)."""
 
     if not show_card:
         _render_summary(summary)
@@ -1379,5 +1368,3 @@ def render_response(
 
     else:
         render_generic(answer, source, summary)
-
-    _render_followup(followup)
