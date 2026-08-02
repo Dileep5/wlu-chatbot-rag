@@ -470,7 +470,6 @@ https://students.wlu.ca/campus-services/tech-services/newsletters/2020/fall/cybe
 https://students.wlu.ca/campus-services/tech-services/newsletters/2020/fall/cyber-security-awareness-month-week-two.html
 https://students.wlu.ca/campus-services/tech-services/newsletters/2020/winter/helpful-tips-to-avoid-cra-scams---cyber-security-newsletter-january-2020.html
 https://students.wlu.ca/campus-services/tech-services/newsletters/2020/winter/tips-to-working-safely-and-securely-from-home.html
-https://students.wlu.ca/campus-services/tech-services/software/apps/microsoft-stream.html
 https://students.wlu.ca/campus-services/tech-services/software/index.html
 https://students.wlu.ca/campus-services/tech-services/software/microsoft-office-365.html
 https://students.wlu.ca/campus-services/tech-services/software/namecoach.html
@@ -867,7 +866,6 @@ https://www.wlu.ca/academics/research/index.html
 https://www.wlu.ca/academics/research/partnerships/index.html
 https://www.wlu.ca/academics/research/research-centres/index.html
 https://www.wlu.ca/academics/research/research-services/index.html
-https://www.wlu.ca/academics/research/research-services/yellowknife-facilities.html
 https://www.wlu.ca/academics/research/researchers/index.html
 https://www.wlu.ca/academics/research/strengths/index.html
 https://www.wlu.ca/academics/teaching-and-learning/award-winning-faculty.html
@@ -875,6 +873,7 @@ https://www.wlu.ca/academics/teaching-and-learning/index.html
 https://www.wlu.ca/academics/teaching-and-learning/innovative-spaces.html
 https://www.wlu.ca/campus-status/index.html
 https://www.wlu.ca/continuing-education/index.html
+https://www.wlu.ca/features/2026/summer/brainworx-camp-laurier.html
 https://www.wlu.ca/features/2026/summer/graduating-isow-scholars-and-leaders-reflect-on-their-laurier-journeys.html
 https://www.wlu.ca/features/2026/winter/laurier-alum-jenny-bird-chose-creativity-over-corporate-and-built-a-top-canadian-jewelry-and-lifestyle-brand.html
 https://www.wlu.ca/features/planting-seeds-of-sovereignty/index.html
@@ -942,6 +941,7 @@ https://www.wlu.ca/news/spotlights/2026/feb/laurier-alum-jonelle-ricketts-makes-
 https://www.wlu.ca/news/spotlights/2026/feb/more-than-1400-guests-celebrate-laurier-brantfords-second-annual-purple-and-gold-party.html
 https://www.wlu.ca/news/spotlights/2026/jan/laurier-historian-eric-story-explores-canadas-forgotten-tuberculosis-epidemic.html
 https://www.wlu.ca/news/spotlights/2026/july/2025-26-donor-impact-report-at-wilfrid-laurier-university-and-beyond-donor-impact-never-stops.html
+https://www.wlu.ca/news/spotlights/2026/july/brainworx-camp-a-hub-of-neurodiversity-inclusion-and-research.html
 https://www.wlu.ca/news/spotlights/2026/july/laurier-alumni-set-to-paddle-162-kilometres-through-algonquin-park-to-support-melanoma-research.html
 https://www.wlu.ca/news/spotlights/2026/july/laurier-appoints-executive-director-experiential-learning-and-career-development.html
 https://www.wlu.ca/news/spotlights/2026/july/laurier-education-dean-maria-cantalini-williams-receives-global-award-for-educational-leadership.html
@@ -970,11 +970,9 @@ https://www.wlu.ca/news/spotlights/2026/may/laurier-awarded-100,000-from-canadia
 https://www.wlu.ca/news/spotlights/2026/may/laurier-music-therapy-alum-madelyn-chung-recognized-for-communications-leadership.html
 https://www.wlu.ca/news/spotlights/2026/may/laurier-to-welcome-2026-ontario-summer-games-to-waterloo-campus-july-30-to-aug-2.html
 https://www.wlu.ca/news/spotlights/2026/may/lauriers-lazaridis-school-of-business-and-economics-closes-the-stock-market-to-celebrate-60th-anniversary.html
-https://www.wlu.ca/news/spotlights/2026/may/mya-baxters-golden-hawk-journey-started-with-a-short-story.html
 https://www.wlu.ca/news/spotlights/2026/may/myths-vs-realities-of-homelessness-a-fact-check-with-laurier-experts.html
 https://www.wlu.ca/news/spotlights/2026/may/planting-seeds-of-sovereignty.html
 https://www.wlu.ca/news/spotlights/2026/may/soussanna-karas-appointed-lauriers-new-general-counsel.html
 https://www.wlu.ca/programs/index.html
 https://www.wlu.ca/programs/interdisciplinary/arts-ba-and-law-degree-sussex/assets/resources/faq.html
 https://www.wlu.ca/programs/social-work/graduate/social-work-msw/assets/resources/faq.html
-https://www.wlu.ca/search/index.html?query=academic+programs
