@@ -12,6 +12,7 @@ or hallucination-gate logic lives here or is affected by this module.
 """
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -139,12 +140,86 @@ def _retrieval_date():
         return datetime.now(timezone.utc).strftime(_DATE_DISPLAY_FORMAT)
 
 
-def build_citation(source, response_type=None):
+# Reused from benchmark_runner.py's own _NEGATED_INFO_AVAILABILITY_
+# PATTERN (a negation next to a word about information being present/
+# documented/stated), already tuned there across many real grounded
+# answers - the 0-2 word gap and excluding "cover(s/ed)" are both
+# deliberate: a wider gap or "cover" both let the pattern reach across
+# an unrelated clause and false-positive on a genuinely confident,
+# correct answer ("CP312 does not require any prerequisites and covers
+# algorithm design.").
+_INFO_AVAILABILITY_WORDS = (
+    r"contain(?:s|ed|ing)?|include[sd]?|specify|specifie[sd]|"
+    r"define[sd]?|outline[sd]?|mention(?:s|ed)?|detail(?:s|ed)?|"
+    r"provide[sd]?|address(?:es|ed)?|state[sd]?|"
+    r"indicate[sd]?|available|found|information|details|data|specifics?"
+)
+_NEGATED_INFO_AVAILABILITY_PATTERN = re.compile(
+    r"\b(?:does\s+not|doesn't|do\s+not|don't|did\s+not|didn't|"
+    r"cannot|can't|unable\s+to|no)\b"
+    rf"(?:\s+\w+){{0,2}}\s+(?:{_INFO_AVAILABILITY_WORDS})\b",
+    re.IGNORECASE
+)
+
+# A second, narrower phrasing family the negation pattern above doesn't
+# cover: the LLM explicitly says the retrieved content is ABOUT
+# something else, rather than saying information is simply missing -
+# e.g. "the retrieved information relates to academic misconduct rather
+# than coursework programs". Confirmed live: generate_answer()'s vector-
+# grounded path cited an unrelated academic-misconduct policy page for
+# "course work?" (asked right after establishing a graduate program as
+# context) - a false-positive keyword/embedding match ("coursework" the
+# word appears in both the misconduct policy and the actual program
+# page, in unrelated senses) that the LLM sometimes, but not reliably,
+# flags in its own answer text.
+_RELATES_TO_OTHER_TOPIC_PATTERN = re.compile(
+    r"\brelate[sd]?\s+to\b[^.?!]{0,80}\brather\s+than\b"
+    r"|\bpertains?\s+to\b[^.?!]{0,80}\b(?:not|rather\s+than)\b"
+    r"|\bnot\s+(?:related|relevant)\s+to\b"
+    r"|\b(?:doesn't|does\s+not)\s+(?:relate|pertain)\s+to\b",
+    re.IGNORECASE
+)
+
+
+def answer_disclaims_relevance(answer_text):
+    """True if the LLM's own grounded answer indicates the retrieved
+    source doesn't actually address the question, rather than
+    confidently answering it - a citation must never be shown in this
+    case, since the underlying source isn't actually authoritative for
+    what was asked (see build_citation()'s answer_text parameter).
+
+    A safety net, not the primary fix: confirmed live across repeated
+    identical queries that the LLM (temperature=0.7) doesn't reliably
+    self-disclaim even when the cited source genuinely doesn't answer
+    the question - it will often confidently discuss the tangentially-
+    related retrieved content without ever hedging. The actual fix for
+    that failure mode is upstream in retriever.py (resolving vague,
+    context-dependent follow-ups against established conversation
+    memory before they ever reach vector search); this only catches
+    the subset of cases where the model does hedge."""
+
+    return bool(
+        _NEGATED_INFO_AVAILABILITY_PATTERN.search(answer_text)
+        or _RELATES_TO_OTHER_TOPIC_PATTERN.search(answer_text)
+    )
+
+
+def build_citation(source, response_type=None, answer_text=None):
     """source: a URL string, an iterable of URL strings, or None/falsy
     (nothing to cite - every non-factual response already passes source
     as None today, e.g. greetings/clarifications/not_found, and this
     returns None right back for those, unchanged from before this
     module existed).
+
+    answer_text: when given, and the answer's own text indicates the
+    retrieved source doesn't actually address the question (see
+    answer_disclaims_relevance() above), returns None instead of citing
+    a source the answer itself says isn't a good match - never shown as
+    if it were authoritative just because retrieval happened to return
+    something. Optional and defaults to None (skip the check) since
+    most callers pass a response_type this check doesn't apply to
+    anyway (deterministic response types were never LLM-phrased to
+    begin with).
 
     Returns None, or:
         {"date": "<display date>",
@@ -155,6 +230,9 @@ def build_citation(source, response_type=None):
     retriever.py response type produces more than one)."""
 
     if not source:
+        return None
+
+    if answer_text and answer_disclaims_relevance(answer_text):
         return None
 
     source_urls = [source] if isinstance(source, str) else [s for s in source if s]

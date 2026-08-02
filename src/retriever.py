@@ -42,7 +42,24 @@ FOLLOWUP_PHRASES = [
     "details",
     "more details",
     "what about this",
-    "what about it"
+    "what about it",
+    # The natural ways someone responds to app.py's answer-first
+    # redesign prompt ("Want the full details? Just ask") - added
+    # alongside the phrasings above rather than as a separate
+    # mechanism, since they need the exact same FOLLOWUP MEMORY
+    # rewrite immediately below to mean anything at all: a bare "show
+    # me" or "yes please" names no entity of its own, so without this
+    # rewrite substituting the established course/program/department/
+    # faculty name in for it first, structured_search() would never
+    # match anything and the request would fall through unresolved.
+    "yes please",
+    "show me",
+    "show details",
+    "show the details",
+    "show me more",
+    "full details",
+    "give me the details",
+    "give me the full details",
 ]
 
 # Trailing punctuation a user might naturally type after a follow-up
@@ -835,6 +852,50 @@ _WHAT_IS_REQUIRED_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# "What courses are there in X?" / "what courses are offered in X?" /
+# "what courses does X have/offer?" - a genuinely different phrasing
+# family from every pattern above, none of which fire unless the
+# question says "required(s)" somewhere. Confirmed live: "what courses
+# are there in mac?" matched none of them and fell through the entire
+# structured cascade straight to vector search, which had no way to
+# know "mac" meant the program already established in conversation
+# memory and surfaced an unrelated building/orientation page instead.
+# Maps to the same _handle_program_required_courses() handler as the
+# "required courses" family - "list the courses" and "list the
+# required courses" are the same underlying capability, just phrased
+# without the word "required".
+_COURSES_IN_PROGRAM_PATTERN = re.compile(
+    r"\bwhat\s+courses?\s+(?:are\s+(?:there\s+|offered\s+)?|is\s+there\s+)"
+    r"(?:in|at|for)\s+(?:the\s+)?(.+)",
+    re.IGNORECASE
+)
+_PROGRAM_HAS_COURSES_PATTERN = re.compile(
+    r"\bwhat\s+courses?\s+does\s+(?:the\s+)?(.+?)\s+(?:have|offer)\b",
+    re.IGNORECASE
+)
+
+# A query that's ENTIRELY "course work"/"coursework"/"courses" (plus
+# trivial punctuation) and nothing else - too generic to have a topic
+# of its own, unlike _is_referentless_query()'s pronoun-reference
+# queries ("it", "that"), so it's never caught by that guard, but the
+# same underlying problem: with no program named, this only means
+# anything as a follow-up to an already-established program. Confirmed
+# live: after establishing "Master of Applied Computing" as context,
+# "course work?" fell through to vector search, which had no way to
+# know the established program and confidently cited an unrelated
+# academic-misconduct policy page that happens to also use the word
+# "coursework" - a false-positive keyword/embedding match, not a real
+# answer to what was actually asked. Only ever resolves via memory
+# (there's no program name in the query text at all to try first,
+# unlike _handle_courses_in_program() above) - with nothing
+# established, this still falls through to vector search unprotected,
+# same as before this fix; that's a pre-existing, unreported gap this
+# bug fix doesn't attempt to also close.
+_BARE_COURSEWORK_PATTERN = re.compile(
+    r"^\s*(?:course\s*work|courses?)\s*\??\s*$",
+    re.IGNORECASE
+)
+
 # Year-specific lookup (Sprint 11C) - a genuinely new query shape with
 # no graduate equivalent (graduate program_course_requirements has no
 # year concept at all). Accepts both numeric ("Year 2") and ordinal-word
@@ -1203,6 +1264,42 @@ def _handle_program_required_courses(program_phrase, memory=None):
     )
 
 
+def _handle_courses_in_program(program_phrase, memory=None):
+    """Wraps _handle_program_required_courses() with a fallback to
+    conversation memory when the phrase itself doesn't resolve to a
+    real program - scoped to _COURSES_IN_PROGRAM_PATTERN/
+    _PROGRAM_HAS_COURSES_PATTERN only, not the older "required courses
+    for X" patterns, which stay exactly as strict as before (naming a
+    program that doesn't exist there is exactly the "no fabrication"
+    case those patterns are already tested against, so falling back to
+    a stale memory program for THEM would risk answering about the
+    wrong program instead of correctly finding nothing).
+
+    This pattern family is different: "what courses are there in mac?"
+    is a genuine follow-up-shaped question, and _match_program_name()
+    has no acronym-expansion of its own (unlike search_program()'s
+    Tier 2, which only recognizes acronyms typed in uppercase, by
+    design, to avoid false positives against ordinary lowercase words -
+    a real user typing a lowercase acronym like "mac" would never
+    match it either way). Confirmed live: after establishing "Master of
+    Applied Computing" as context across several turns, "what courses
+    are there in mac?" fell through the entire structured cascade to
+    vector search and surfaced an unrelated Milton campus orientation
+    page - established context should win over an unrelated vector
+    match for exactly this kind of short, ambiguous, already-resolved
+    reference."""
+
+    program_name = _match_program_name(program_phrase, allow_dataless=True)
+
+    if not program_name:
+        program_name = _resolve_typed_value(memory, "program")
+
+    if not program_name:
+        return None
+
+    return _handle_program_required_courses(program_name, memory)
+
+
 def _handle_program_year_courses(program_name, year, memory=None):
 
     conn = sqlite3.connect("data/programs.db")
@@ -1278,6 +1375,15 @@ def search_program_course_requirements(question, memory=None):
             if result:
                 return result
 
+    if _BARE_COURSEWORK_PATTERN.match(question):
+
+        program_name = _resolve_typed_value(memory, "program")
+
+        if program_name:
+            result = _handle_program_required_courses(program_name, memory)
+            if result:
+                return result
+
     match = _REVERSE_PROGRAM_REQUIREMENT_PATTERN.search(question)
 
     if match:
@@ -1314,6 +1420,20 @@ def search_program_course_requirements(question, memory=None):
 
     if match:
         result = _handle_program_required_courses(match.group(1), memory)
+        if result:
+            return result
+
+    match = _COURSES_IN_PROGRAM_PATTERN.search(question)
+
+    if match:
+        result = _handle_courses_in_program(match.group(1), memory)
+        if result:
+            return result
+
+    match = _PROGRAM_HAS_COURSES_PATTERN.search(question)
+
+    if match:
+        result = _handle_courses_in_program(match.group(1), memory)
         if result:
             return result
 
@@ -1793,6 +1913,21 @@ _PROGRAM_NORMALIZE_RULES = [
     # real prefixes present in the discovered undergraduate catalog
     # (BA, BBA, BKin, BMus, BSc).
     (r"\bb(?:a|ba|kin|mus|sc)\b", " bach "),
+    # Bare "master(s)"/"master's", with no "of" immediately following
+    # (already handled by the "master of" rule above, and by then
+    # already consumed - this rule only ever reaches whatever "master"
+    # occurrences that one didn't). Real graduate program titles always
+    # spell out "Master of X" the way "master of" above expects, but
+    # real users just as often phrase it "masters in X" or "a master's
+    # degree in X" instead - confirmed live: "masters in computer
+    # science" left "masters" completely unnormalized, so
+    # _subject_match_degree_conflicts() found no degree token in the
+    # user's text at all and never blocked the match against the
+    # unrelated undergraduate "Honours BSc Computer Science" - the
+    # guard exists specifically for this kind of cross-level collision
+    # but silently did nothing whenever the user's own phrasing wasn't
+    # graduate-title-shaped.
+    (r"\bmaster'?s?\b", " mast "),
     (r"\bprogram\b", " "),
     (r"\bdegree\b", " "),
 ]
@@ -1849,6 +1984,17 @@ def _mentioned_degree_tokens(text):
     return set(_DEGREE_TOKEN_CAPTURE_PATTERN.findall(_strip_filler(text.lower())))
 
 
+# "Graduate" (unlike "masters"/"doctor of"/"diploma in") doesn't map to
+# one specific degree-level token - a graduate program could be a
+# Master's, Doctoral, or Graduate Diploma - so it can't be folded into
+# _mentioned_degree_tokens()/the token-disjoint check below without
+# also, incorrectly, blocking real doctoral/diploma candidates whenever
+# a user just says "graduate". Its role here is narrower and
+# unambiguous instead: an undergraduate ("bach") candidate should never
+# match when the user's text explicitly says "graduate".
+_GRADUATE_LEVEL_SIGNAL_PATTERN = re.compile(r"\bgraduate\b", re.IGNORECASE)
+
+
 # Bare-subject matching alone loses degree-level information entirely -
 # confirmed live during Sprint 11C verification: "Does the Honours
 # Bachelor of Business Administration require CP104?" incorrectly
@@ -1866,10 +2012,13 @@ def _subject_match_degree_conflicts(candidate_name, text_lower):
     candidate_tokens = _mentioned_degree_tokens(candidate_name)
     text_tokens = _mentioned_degree_tokens(text_lower)
 
-    if not candidate_tokens or not text_tokens:
-        return False
+    if candidate_tokens and text_tokens and candidate_tokens.isdisjoint(text_tokens):
+        return True
 
-    return candidate_tokens.isdisjoint(text_tokens)
+    if "bach" in candidate_tokens and _GRADUATE_LEVEL_SIGNAL_PATTERN.search(text_lower):
+        return True
+
+    return False
 
 
 # Bare single-word subjects ("Philosophy", "Music", "History", "English",

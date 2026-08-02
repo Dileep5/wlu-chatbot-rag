@@ -1894,7 +1894,17 @@ if query:
         # decision above is already final. Stored in this enriched form
         # so the history-replay loop below re-renders it identically
         # without repeating any lookup.
-        source = citation.build_citation(source, response_type)
+        #
+        # answer_text is passed through so build_citation() can suppress
+        # the citation if the answer itself indicates the retrieved
+        # source doesn't actually address the question - never shown as
+        # if it were authoritative just because retrieval returned
+        # something (confirmed live: a vector-grounded answer for
+        # "course work?" cited an unrelated academic-misconduct policy
+        # page). Harmless to pass for every response_type: deterministic
+        # types never contain this kind of hedging language to begin
+        # with, so the check is simply a no-op for them.
+        source = citation.build_citation(source, response_type, answer)
 
         # Generated exactly once here, at message-creation time - never
         # in the history-replay loop above, which re-runs on every
