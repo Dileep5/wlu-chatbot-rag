@@ -1692,13 +1692,27 @@ for msg in st.session_state.messages:
         avatar=USER_AVATAR if msg["role"] == "user" else ASSISTANT_AVATAR
     ):
 
-        render_response(
-            msg.get("response_type"),
-            msg["content"],
-            msg.get("source"),
-            msg.get("summary"),
-            msg.get("followup"),
-        )
+        # A user message has no response_type/source/summary/followup -
+        # it's never been through render_response() at all, live: the
+        # user-input block below renders it with a plain st.markdown(),
+        # no card or eyebrow label. This loop re-runs on every script
+        # rerun (every new interaction), so without this branch, once a
+        # user message stops being the newest turn it would be replayed
+        # straight through render_response() instead - which, having no
+        # response_type to dispatch on, falls through to render_generic()
+        # and wrongly prepends the "Answer" eyebrow label to the user's
+        # own question. Kept in exact sync with the live rendering path
+        # below on purpose, not merely similar to it.
+        if msg["role"] == "user":
+            st.markdown(msg["content"])
+        else:
+            render_response(
+                msg.get("response_type"),
+                msg["content"],
+                msg.get("source"),
+                msg.get("summary"),
+                msg.get("followup"),
+            )
 
 
 # -----------------------------
