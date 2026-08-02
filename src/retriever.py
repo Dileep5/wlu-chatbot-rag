@@ -3421,6 +3421,127 @@ _BOILERPLATE_RANK_PENALTY = 0.08
 _NEWS_URL_PATTERN = re.compile(r"/news/", re.IGNORECASE)
 _NEWS_RANK_PENALTY = 0.15
 
+# A page scoped to one specific program ("/programs/<subject>/...") is
+# rarely the right source for a broad, university-wide procedural
+# question that never names that subject at all - confirmed live:
+# "How do I make changes to my course registration?" (a general
+# question, no program named) surfaced the Music program's own FAQ
+# page as the answer, purely because that FAQ's title happens to
+# contain "Course" ("Music Program and Course Offering FAQs") and its
+# body happens to mention LORIS in the specific context of music
+# ensemble registration - both true, both irrelevant to what was
+# actually asked. A different, differently-worded registration
+# question ("How do I register for courses?") returned a completely
+# different, also-not-quite-right answer (a MyLearningSpace self-
+# registration guide - see _MYLS_SELF_REGISTRATION_URL below) for the
+# same underlying reason: the corpus was confirmed, by direct search,
+# to have no single general "how to register for courses" page at all,
+# only scattered incidental mentions across narrow program-specific
+# advising pages - so a generic question has no genuinely authoritative
+# match to surface. This doesn't fix the missing-source problem - it
+# can't invent content that isn't scraped - but applied as a penalty to
+# hybrid_rerank.cross_encoder_rerank()'s own scores (see
+# _apply_topical_mismatch_penalty() and its call site in
+# hybrid_search() below - the cross-encoder, not _rerank_vector_
+# candidates() above, is what actually picks the cited page; that
+# function's own per-URL dedup is a completely separate, dead code
+# path today, not touched here), it stops a narrow program's own FAQ
+# from outranking a genuinely general page, or from winning outright
+# when nothing general exists, in favor of the LLM's own "the available
+# WLU data doesn't contain enough information to answer confidently"
+# fallback (already part of generate_answer()'s system prompt, app.py)
+# once nothing left outranks it. Only ever fires when the subject truly
+# isn't mentioned anywhere in the question - a real "How do I register
+# for my Music courses?" question still correctly reaches this same
+# page.
+_PROGRAM_SPECIFIC_URL_PATTERN = re.compile(r"/programs/([a-z-]+)/", re.IGNORECASE)
+_PROGRAM_SPECIFIC_MISMATCH_PENALTY = 6.0
+
+# The MyLearningSpace homepage guide's "Self Registration" section is
+# specifically about registering for a short, fixed list of NON-CREDIT
+# training modules within the MyLS learning platform (WHIMIS Training,
+# Laboratory Safety, Academic Integrity Certificate, Mathematics and
+# Statistics Learning Support, Respondus Practice Quiz, Young Worker
+# Health and Safety Orientation) - not academic course registration at
+# all, which is a genuinely different system (LORIS) and process.
+# Confirmed live: "how do i access my mac courses online" (an ambiguous
+# acronym - WLU has at least three real "MAC"s: Master of Applied
+# Computing, the Milton Academic Centre, and the Mathematics Assistance
+# Centre - with no established context to disambiguate it) surfaced
+# this page and confidently walked through the self-registration steps
+# as if they answered the question, despite having nothing to do with
+# any of the three. Penalized whenever the question doesn't mention
+# MyLS by name or any of the specific module names this page actually
+# covers - a genuine "how do I use MyLS self-registration" question
+# still correctly reaches it.
+_MYLS_SELF_REGISTRATION_URL = (
+    "myls-homepage.html"
+)
+_MYLS_SELF_REGISTRATION_ON_TOPIC_WORDS = {
+    "myls", "mylearningspace", "whimis", "laboratory", "safety",
+    "respondus", "worker",
+}
+_MYLS_SELF_REGISTRATION_MISMATCH_PENALTY = 6.0
+
+
+def _apply_topical_mismatch_penalty(candidates, question_words):
+    """Adjusts hybrid_rerank.cross_encoder_rerank()'s own
+    cross_encoder_score downward for a candidate whose URL matches one
+    of the confirmed topical-mismatch patterns above, then re-sorts.
+    ms-marco-MiniLM-L-6-v2 returns a raw, unbounded relevance logit, not
+    a 0-1 probability - confirmed live the winning score for a real
+    mismatch case sat at 5.48 with the best remaining (still imperfect,
+    but not confidently wrong) alternative at 3.45, a gap of ~2 that a
+    smaller penalty was measured to not consistently clear. 6.0 was
+    picked empirically against that real gap, not a theoretical
+    "handful of points" guess - large enough that a mismatched
+    candidate essentially never wins outright unless every other
+    candidate in the pool is ALSO penalized, which is exactly the
+    "nothing good exists" case this is meant to surface honestly rather
+    than paper over.
+    Never mutates the candidate dicts hybrid_search() already recorded
+    in its debug trace - operates on the same objects in place is fine
+    since cross_encoder_rerank() already returns fresh dicts, but the
+    re-sort itself is done on a new list so caller code that still holds
+    a reference to the pre-penalty order (there isn't any today, but
+    this keeps the function honest about not having a hidden side
+    effect) is unaffected."""
+
+    for candidate in candidates:
+
+        url = candidate.get("url") or ""
+
+        program_match = _PROGRAM_SPECIFIC_URL_PATTERN.search(url)
+
+        if program_match:
+
+            subject_words = {
+                _normalize_rerank_word(w)
+                for w in program_match.group(1).split("-")
+            }
+
+            if not any(
+                _normalize_rerank_word(w) in subject_words
+                for w in question_words
+            ):
+                candidate["cross_encoder_score"] -= (
+                    _PROGRAM_SPECIFIC_MISMATCH_PENALTY
+                )
+
+        if _MYLS_SELF_REGISTRATION_URL in url:
+
+            if not any(
+                _normalize_rerank_word(w) in _MYLS_SELF_REGISTRATION_ON_TOPIC_WORDS
+                for w in question_words
+            ):
+                candidate["cross_encoder_score"] -= (
+                    _MYLS_SELF_REGISTRATION_MISMATCH_PENALTY
+                )
+
+    return sorted(
+        candidates, key=lambda c: c["cross_encoder_score"], reverse=True
+    )
+
 # Weighted well above the boilerplate/news penalties above so a genuine
 # title/URL topic match always outranks a merely-shorter-distance,
 # topically-unrelated page (calibrated live: without this, e.g. "Mars"-
@@ -4958,6 +5079,17 @@ def hybrid_search(question, memory=None):
     fused = hybrid_rerank.reciprocal_rank_fusion(dense_candidates, bm25_candidates)
 
     reranked = hybrid_rerank.cross_encoder_rerank(question, fused)
+
+    # See _apply_topical_mismatch_penalty()'s own comment: the cross-
+    # encoder alone confidently picked a narrow, topically-mismatched
+    # page for two confirmed real questions (a program-specific FAQ for
+    # a general procedural question; a non-credit-module self-
+    # registration guide for an ambiguous "MAC courses" question) -
+    # this demotes those specific, confirmed patterns without touching
+    # the cross-encoder's judgment for every other query.
+    reranked = _apply_topical_mismatch_penalty(
+        reranked, _significant_question_words(question)
+    )
 
     winner = reranked[0]
 
