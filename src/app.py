@@ -166,42 +166,45 @@ DETERMINISTIC_RESPONSE_TYPES = {
 }
 
 
-def generate_answer(
-    query,
-    context,
-    response_type=None
-):
+# ------------------------------------------------------------------
+# Sprint B - vector-answer presentation (answer-generation layer only).
+#
+# Everything in this block is used ONLY by generate_answer() and
+# _finalize_response() below to shape the free-form `vector` response.
+# Retrieval, structured search, ranking, citations, and the
+# deterministic response types are NOT touched: for every deterministic
+# type generate_answer() still short-circuits to `context.strip()`
+# exactly as before, so the only answers these rules can change are the
+# LLM-generated `vector` ones.
+#
+# `_detect_vector_topic()` classifies the QUERY (never the retrieved
+# context) into a coarse topic so a vector answer gets a stable,
+# Gemini-style layout instead of one generic prompt for every topic.
+# Mis-classification is bounded, not harmful: every layout hint in
+# VECTOR_TOPIC_STRUCTURE is constrained by the system prompt's "never
+# invent a heading whose content is absent from the retrieved text"
+# rule, so a wrong topic can only change layout, never add content.
+# ------------------------------------------------------------------
 
-    if response_type in DETERMINISTIC_RESPONSE_TYPES:
-        return context.strip()
 
-    api_key = os.getenv(
-        "OPENAI_API_KEY"
-    )
-
-    if not api_key:
-
-        return (
-            "OpenAI API key not found."
-        )
-
-    client = OpenAI()
-
-    messages = [
-
-        {
-            "role": "system",
-            "content": """
+# The new Sprint B system prompt for the `vector` answer path. Preserves
+# every grounding rule from the previous prompt verbatim in substance
+# (the benchmark's keyword/citation checks depend on them) while
+# upgrading the formatting contract to a Gemini-style professional
+# answer: concise one-sentence overview lead, clear markdown section
+# headings, bullets, and tables where the retrieved text has comparable
+# items - and an explicit "synthesize, never dump long text" rule.
+VECTOR_SYSTEM_PROMPT = """\
 You are the official AI assistant
 for Wilfrid Laurier University.
 
-You should behave naturally and
-conversationally, similar to ChatGPT
-or Claude, but every specific fact
-you state must come from the
-retrieved WLU information you are
-given below, never from your own
-general knowledge.
+You behave like a polished, professional
+university assistant in the style of
+Gemini - warm, concise, and clearly
+organized. Every specific fact you
+state must come from the retrieved WLU
+information you are given below, never
+from your own general knowledge.
 
 Responsibilities:
 
@@ -241,62 +244,277 @@ Grounding rules (critical):
 Rules:
 
 - Be friendly.
-- Be conversational.
+- Be professional and concise.
 - Only answer questions related to
   Wilfrid Laurier University. If asked
   about something unrelated, politely
   say you can only help with WLU topics.
 
-Formatting (visual structure, not content -
-every rule above about what you can say
-still applies exactly as written):
+Answer structure (important):
 
-- Use markdown to make the answer easy to
-  scan, the way a well-formatted web answer
-  looks - not a single dense paragraph.
-- **Bold** key terms, names, numbers, and
-  requirements the user is likely scanning
-  for (deadlines, course codes, amounts,
-  names).
-- When the answer covers multiple items,
-  steps, or requirements, use a short
-  bulleted or numbered list instead of
-  running them together in prose.
-- Keep paragraphs short - a few sentences
-  at most before a line break, list, or new
-  paragraph.
-- Formatting must never change or hide a
-  fact - it's purely how the same grounded
-  content is laid out.
+- START with a short overview: answer
+  the question directly in 1-2
+  sentences before any detail.
+- Then organize the body with clear
+  markdown headings (e.g. **Key
+  Details**, **Important Dates**) only
+  when the answer has 2+ distinct
+  parts; a single short answer needs
+  no heading. Never invent a heading
+  whose content isn't in the retrieved
+  text.
+- Synthesize the retrieved text - never
+  dump long, unbroken passages. Pick
+  out the facts that answer the
+  question and present them cleanly.
+- Keep every paragraph to a few
+  sentences.
+
+Formatting (visual structure only -
+never change or hide a fact):
+
+- **Bold** the key terms, numbers,
+  names, and dates the user is likely
+  scanning for (course codes,
+  deadlines, amounts, requirements).
+- Use a short bulleted list for items
+  and a numbered list for steps.
+- When the retrieved text contains 2+
+  comparable items (dates, fees,
+  eligibility conditions), present
+  them in a markdown table with a
+  header row - tables are easier to
+  scan than bullets for tabular facts.
 
 Conversational follow-ups (occasional, situational):
 
 - Sometimes, when it naturally fits the
-  topic, end your answer with one short,
-  genuine follow-up question about the
-  user's specific situation - the way a
-  curious person would, not a canned
-  prompt, and not on every answer.
+  topic, end your answer with one
+  short, genuine follow-up question
+  about the user's specific situation -
+  the way a curious person would, not
+  a canned prompt, and not on every
+  answer.
 - Only ask this if the retrieved
-  information above actually distinguishes
-  different cases relevant to the question
-  (e.g. domestic vs. international
-  eligibility, undergraduate vs. graduate,
-  different campuses or terms). For
-  example, after answering about
-  scholarships that differ by student
-  status, you could ask "Are you a domestic
-  or international student? That affects
-  which ones you'd qualify for."
+  information above actually
+  distinguishes different cases
+  relevant to the question (e.g.
+  domestic vs. international
+  eligibility, undergraduate vs.
+  graduate, different campuses or
+  terms).
 - Never ask a follow-up question that
   implies information exists if the
-  retrieved text above doesn't actually
-  contain it - only ask about a distinction
-  that's genuinely present in the retrieved
-  information.
+  retrieved text above doesn't
+  actually contain it - only ask about
+  a distinction that's genuinely
+  present in the retrieved information.
 """
-        }
 
+
+_VECTOR_TOPIC_PATTERNS = [
+    # Ordered most-specific first - first match wins.
+    ("deadline", re.compile(
+        r"deadline|last day|due date|drop|withdraw|refund|add/drop|"
+        r"exam schedule|exam date|important dates|academic calendar|"
+        r"semester dates|term dates|payment due|tuition due|fees due|"
+        r"fee due|apply by|intake|start date|end date|registration "
+        r"(?:opens|closes|deadline)",
+        re.IGNORECASE)),
+    ("policy", re.compile(
+        r"policy|regulation|academic integrity|plagiarism|misconduct|"
+        r"code of conduct|bylaw|rule",
+        re.IGNORECASE)),
+    ("service", re.compile(
+        r"library|bookstore|health|wellness|gym|recreation|residence|"
+        r"dining|cafeteria|career centre|career center|student services|"
+        r"academic advising|advising|shuttle|bus|parking|wifi|printing|"
+        r"accessib|mental health|counselling|counseling|disability|"
+        r"fitness|locker|food",
+        re.IGNORECASE)),
+    ("faculty", re.compile(
+        r"professor|dr\.?\b|teaches|teaching|research area|faculty "
+        r"member|office hours|email of|their email|researcher",
+        re.IGNORECASE)),
+    ("department", re.compile(
+        r"department|school of|faculty of|college of",
+        re.IGNORECASE)),
+    ("program", re.compile(
+        r"program|degree|major|minor|graduate|undergraduate|admission|"
+        r"application|enrol|\bmba\b|\bmsc\b|\bma\b|\bphd\b|master|"
+        r"bachelor|diploma|curriculum|co-op|coop",
+        re.IGNORECASE)),
+    ("course", re.compile(
+        r"course|class|credits?|credit|prerequisite|syllabus|exclusion|"
+        r"\bcp\d{3}\b|\bbu\d{3}\b|\bma\d{3}\b|\bps\d{3}\b|\bsy\d{3}\b|"
+        r"\bec\d{3}\b|\bgg\d{3}\b",
+        re.IGNORECASE)),
+]
+
+
+def _detect_vector_topic(query):
+    """Coarse topic label for a vector (free-form) query - used to pick
+    a stable answer layout and the deterministic "You may also ask"
+    suggestions. First matching pattern wins (the list is ordered by
+    specificity); returns "general" when nothing matches."""
+    for topic, pattern in _VECTOR_TOPIC_PATTERNS:
+        if pattern.search(query):
+            return topic
+    return "general"
+
+
+# Stable, per-topic section scaffolds appended to the vector system
+# prompt (Sprint B). Each one is only a LAYOUT contract - the system
+# prompt's grounding rules and "never invent a heading" guard apply on
+# top of it, so a scaffold can never manufacture facts.
+VECTOR_TOPIC_STRUCTURE = {
+    "course": (
+        "Layout for this course question:\n"
+        "- Open with **Overview** - one sentence naming the course "
+        "(code and subject if present in the retrieved text).\n"
+        "- **Key Details** (bullets) - credits, prerequisites, "
+        "exclusions, delivery/location - only fields actually present.\n"
+        "- **Important Notes** - only if the retrieved text has "
+        "something worth flagging (restrictions, requirements).\n"
+        "- **Related Information** - only if present (department, "
+        "programs, related courses)."
+    ),
+    "program": (
+        "Layout for this program question:\n"
+        "- Open with **Overview** - one sentence naming the program and "
+        "its level (undergraduate/graduate).\n"
+        "- **Admission** - requirements or application details present "
+        "in the retrieved text.\n"
+        "- **Duration** - length and full-time/part-time, if present.\n"
+        "- **Career Opportunities** - only if the retrieved text "
+        "mentions careers or outcomes."
+    ),
+    "faculty": (
+        "Layout for this faculty question:\n"
+        "- Open with **Overview** - one sentence naming the person and "
+        "their role.\n"
+        "- **Research** - their research interests, from the retrieved "
+        "text.\n"
+        "- **Contact** - office, email, phone, only if present."
+    ),
+    "department": (
+        "Layout for this department question:\n"
+        "- Open with **Overview** - one sentence naming the department "
+        "and what it covers.\n"
+        "- **Programs / Offerings** - bullets, only if present.\n"
+        "- **Contact** - location, phone, email, only if present."
+    ),
+    "policy": (
+        "Layout for this policy question:\n"
+        "- Open with **Overview** - one sentence on what the policy "
+        "governs (name it, including its number if present).\n"
+        "- **Purpose** - why the policy exists, from the retrieved "
+        "text.\n"
+        "- **Important Points** - the key requirements as bullets."
+    ),
+    "deadline": (
+        "Layout for this dates/deadline question:\n"
+        "- Open with **Overview** - one sentence naming the event(s) "
+        "the user asked about.\n"
+        "- **Important Dates** - a markdown table with columns "
+        "`| Date | Event | Notes |` whenever the retrieved text has 2+ "
+        "dates; every row must come from the retrieved text - never "
+        "estimate or shift a date.\n"
+        "- Close with a one-line **Summary** of what the dates mean "
+        "(e.g. what happens after a drop or refund cutoff)."
+    ),
+    "service": (
+        "Layout for this campus-service question:\n"
+        "- Open with **Overview** - one sentence on what the service is "
+        "and where it is.\n"
+        "- **Services Available** - bullets from the retrieved text.\n"
+        "- **Eligibility** - who can use it, only if present.\n"
+        "- **Contact** - hours, location, phone/email, only if present."
+    ),
+    "general": (
+        "Layout: open with a one-sentence direct answer (overview), then "
+        "group the body under short headings only when it has 2+ "
+        "distinct parts; a single short answer needs no heading."
+    ),
+}
+
+
+# Deterministic "You may also ask" suggestions for vector answers
+# (Sprint B). A vector answer has no captured course/program to act on,
+# so the FOLLOWUP_SUGGESTIONS entity-buttons above don't apply - these
+# are plain, self-contained WLU questions instead, each submitted
+# verbatim as a new user turn (action "ask_suggestion") and routed
+# through the normal pipeline exactly like something the user typed.
+# Fixed per detected topic, never LLM-generated - the same
+# capability-safety reasoning as FOLLOWUP_SUGGESTIONS above.
+VECTOR_TOPIC_SUGGESTIONS = {
+    "deadline": [
+        "What are the tuition payment deadlines?",
+        "When can I add or drop a course?",
+    ],
+    "policy": [
+        "Where can I find the full policy index?",
+        "What are the consequences of academic misconduct?",
+    ],
+    "service": [
+        "What are the library hours?",
+        "How do I contact Student Services?",
+    ],
+    "faculty": [
+        "How do I find a faculty member's email?",
+        "How do I contact a department at WLU?",
+    ],
+    "department": [
+        "How do I contact a department at WLU?",
+        "What programs does WLU offer?",
+    ],
+    "program": [
+        "What programs does WLU offer?",
+        "What are the admission requirements for graduate programs?",
+    ],
+    "course": [
+        "What is the academic calendar?",
+        "When can I add or drop a course?",
+    ],
+}
+
+
+def generate_answer(
+    query,
+    context,
+    response_type=None
+):
+
+    if response_type in DETERMINISTIC_RESPONSE_TYPES:
+        return context.strip()
+
+    api_key = os.getenv(
+        "OPENAI_API_KEY"
+    )
+
+    if not api_key:
+
+        return (
+            "OpenAI API key not found."
+        )
+
+    client = OpenAI()
+
+    system_prompt = VECTOR_SYSTEM_PROMPT
+
+    structure_hint = VECTOR_TOPIC_STRUCTURE.get(
+        _detect_vector_topic(query)
+    )
+
+    if structure_hint:
+
+        system_prompt = f"{system_prompt}\n\n{structure_hint}"
+
+    messages = [
+        {
+            "role": "system",
+            "content": system_prompt,
+        }
     ]
 
     messages.extend(
@@ -1010,6 +1228,21 @@ def _finalize_response(query, answer, source, response_type, memory):
         followup = (
             FOLLOWUP_SUGGESTIONS.get(response_type) if response_type else None
         )
+        # Vector (free-form LLM) answers have no captured entity to act
+        # on, so FOLLOWUP_SUGGESTIONS has no entry for them - add the
+        # deterministic, self-contained "You may also ask" questions for
+        # the detected topic instead (Sprint B). These are plain WLU
+        # questions submitted verbatim as a new user turn (action
+        # "ask_suggestion"), never deterministic-entity actions.
+        if followup is None and response_type == "vector":
+            suggestions = VECTOR_TOPIC_SUGGESTIONS.get(
+                _detect_vector_topic(query)
+            )
+            if suggestions:
+                followup = [
+                    {"label": q, "action": "ask_suggestion"}
+                    for q in suggestions
+                ]
 
     followup_context = _capture_followup_context(memory) if followup else None
 
@@ -1077,6 +1310,21 @@ def _render_followup_buttons(message_index, message):
                 FOLLOWUP_SUGGESTIONS.get(message.get("response_type"))
                 if message.get("response_type") else None
             )
+
+            st.rerun()
+            return
+
+        if suggestion["action"] == "ask_suggestion":
+
+            # A plain, self-contained WLU question: hand it to the main
+            # input loop through the same pending_query mechanism the
+            # starter "Try asking" buttons use, so it flows through the
+            # FULL turn pipeline exactly as if the user had typed it
+            # (turn_count increment, user-message append, routing,
+            # summary/citation, followup buttons on the reply). Never
+            # routed through _resolve_button_action(), which only knows
+            # the deterministic entity actions above.
+            st.session_state.pending_query = suggestion["label"]
 
             st.rerun()
             return
