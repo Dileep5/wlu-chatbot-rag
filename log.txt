@@ -1,0 +1,28 @@
+2026-08-03 01:07:54.546 Uvicorn server started on 0.0.0.0:8502
+
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8502
+  Network URL: http://192.168.2.103:8502
+
+  For better performance, install the Watchdog module:
+
+  $ xcode-select --install
+  $ pip install watchdog
+            
+2026-08-03 01:07:54.762 Script compilation error
+Traceback (most recent call last):
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 660, in _run_script
+    code = self._script_cache.get_bytecode(script_path)
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/site-packages/streamlit/runtime/scriptrunner/script_cache.py", line 72, in get_bytecode
+    filebody = magic.add_magic(filebody, script_path)
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/site-packages/streamlit/runtime/scriptrunner/magic.py", line 45, in add_magic
+    tree = ast.parse(code, script_path, "exec")
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ast.py", line 50, in parse
+    return compile(source, filename, mode, flags,
+                   _feature_version=feature_version, optimize=optimize)
+  File "/Users/deepu/Documents/Graduate Project/WLU ChatBot/src/app.py", line 1106
+    "raw_source": raw_source
+                  ^^^^^^^^^^
+SyntaxError: invalid syntax. Perhaps you forgot a comma?
+2026-08-03 01:07:54.765 Thread 'MainThread': missing ScriptRunContext! This warning can be ignored when running in bare mode.

@@ -114,11 +114,29 @@ SITEMAP_DOMAINS = ("www.wlu.ca", "students.wlu.ca")
 # support-and-advising/" deliberately covers its own
 # "calendars-and-petitions/" subpath (academic deadlines/calendars) too,
 # so no separate entry is needed for that.
+#
+# Coverage audit (2026-08) found two entire sections missing from this
+# list, not just a few individual pages within an already-covered one:
+# "/academics/convocation/" (graduation dates/deadlines, applying to
+# graduate, ceremony/gown-rental logistics) and "/finances/"
+# (scholarships-and-bursaries, tuition-and-fees fee breakdowns with
+# actual dollar figures, financial-aid, graduate-funding-and-awards) -
+# confirmed live, every page under both is real and publicly served
+# (200 OK) but neither prefix was ever in this allowlist, so Pass 2
+# never had a chance to discover any of it, regardless of how many
+# individual URLs happened to get added elsewhere by hand. Before this
+# fix, the only scholarship-related content in the corpus was "Writing
+# the Scholarship Proposal" (support-and-advising) and the only
+# tuition content was policy text about the tuition guarantee, never
+# an actual fee schedule - both confirmed by a real user-facing query
+# citing the wrong page as if it were the answer.
 SITEMAP_SECTIONS = [
     ("www.wlu.ca", "/about/governance/assets/resources/"),   # policies
     ("students.wlu.ca", "/academics/support-and-advising/"), # deadlines/calendars + advising
+    ("students.wlu.ca", "/academics/convocation/"),           # convocation/graduation
     ("students.wlu.ca", "/campus-services/"),                # campus services
     ("students.wlu.ca", "/support-and-wellness/"),            # student services/wellness
+    ("students.wlu.ca", "/finances/"),                        # scholarships/tuition/financial aid
 ]
 
 # Within the policies path specifically, these aren't part of the
