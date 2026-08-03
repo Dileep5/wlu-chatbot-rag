@@ -2064,6 +2064,14 @@ def _generate_acronym(program_name):
     return "".join(letters).upper()
 
 
+# Sprint 2: a question that explicitly says "department"/"departments" is
+# asking about a DEPARTMENT page, not about a program that happens to share
+# the subject's name. This gates the search_program() guard below (see its
+# comment), and is deliberately distinct from the broader academic-signal
+# pattern used by _department_name_matches().
+_DEPARTMENT_INTENT_PATTERN = re.compile(r"\bdepartments?\b", re.IGNORECASE)
+
+
 def search_program(question, memory=None):
 
     conn = sqlite3.connect(
@@ -2100,6 +2108,26 @@ def search_program(question, memory=None):
     conn.close()
 
     question_lower = question.lower()
+
+    # Department-intent guard (Sprint 2): when the question explicitly
+    # names a "department" AND search_department() can resolve it, the
+    # query is about the DEPARTMENT page - "Tell me about the Ancient
+    # Studies department" must return the Ancient Studies department
+    # overview, not the "Honours BA Ancient Studies" program whose
+    # subject words happen to be a substring of the question. Without
+    # this, the program branch (which runs earlier in structured_search()
+    # than the department branch) captures every "the X department"
+    # question, so the department lookup is never reached and the answer
+    # is a program profile. Coordinator routing already relies on this
+    # same deferral for single-word subjects (see the
+    # _PROGRAM_SUBJECT_SIGNAL_PATTERN comment above); this extends it to
+    # every department-naming question. memory is deliberately NOT passed
+    # to this probe call: it only decides whether to defer, and the real
+    # search_department() call in the DEPARTMENT branch below records the
+    # entity - probing here must not double-record it.
+    if _DEPARTMENT_INTENT_PATTERN.search(question_lower):
+        if search_department(question, None) is not None:
+            return None
 
     # Tier 1: exact stored-name substring match (highest priority, unchanged).
     for row in rows:
@@ -2526,12 +2554,28 @@ _DEPARTMENT_ACADEMIC_SIGNAL_PATTERN = re.compile(
 
 def _department_name_matches(department_name, question_lower):
 
+    name = department_name.lower()
+
     # Whole-word/whole-phrase match, not substring containment - this is
     # what stops a name like "Art" from matching inside an unrelated word,
     # on top of the academic-signal gate below.
-    if not re.search(
-        rf"\b{re.escape(department_name.lower())}\b", question_lower
-    ):
+    #
+    # The trailing "\b" is emitted only when the name ends in a word
+    # character. A name ending in a non-word character (parentheses:
+    # "Management Option (LSBE)", "Geography (GG/ES)") can never match
+    # with a trailing boundary - the character after ")" is a space or
+    # end-of-text, and neither forms a word boundary, so the whole-phrase
+    # match silently fails and those departments become unresolvable by
+    # name (same class of bug as the trailing-"\b" note in
+    # _strip_person_titles). Confirmed live: DEPT_014 "Management Option
+    # (LSBE)" and the exact "Criminology Minor (Faculty of Human and
+    # Social Sciences)" row both failed to match for this reason.
+    if re.search(r"\w$", name):
+        name_pattern = rf"\b{re.escape(name)}\b"
+    else:
+        name_pattern = rf"\b{re.escape(name)}"
+
+    if not re.search(name_pattern, question_lower):
         return False
 
     if " " in department_name.strip():
@@ -2576,15 +2620,33 @@ def search_department(question, memory=None):
 
     question_lower = question.lower()
 
+    # Most-specific match wins, not first row in DB order (Sprint 2).
+    # Distinct department rows can share a whole-word prefix - "Criminology"
+    # and "Criminology Minor (Faculty of Human and Social Sciences)" are
+    # separate rows, and several departments also carry duplicate rows for
+    # different academic-calendar versions. A row only enters consideration
+    # when its FULL name appears in the question, so the longest matching
+    # name is the most specific referent the user named; returning the
+    # first row instead would resolve "Criminology Minor (Faculty of Human
+    # and Social Sciences) department" to the broader "Criminology" page.
+    best_row = None
+    best_name_len = -1
+
     for row in rows:
 
         if _department_name_matches(row[0], question_lower):
 
-            if memory is not None:
-                memory["last_department"] = row[0]
-                _record_entity(memory, "department", row[0], row[0], "search_department")
+            if len(row[0]) > best_name_len:
+                best_row = row
+                best_name_len = len(row[0])
 
-            return row
+    if best_row is not None:
+
+        if memory is not None:
+            memory["last_department"] = best_row[0]
+            _record_entity(memory, "department", best_row[0], best_row[0], "search_department")
+
+        return best_row
 
     return None
 
