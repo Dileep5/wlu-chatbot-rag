@@ -1,3 +1,52 @@
+import logging
+logging.basicConfig(level=logging.DEBUG)
+
+def log_retrieval_details(query):
+    logging.debug('===========================\nQUERY\n===========================')
+    logging.debug(f'Normalized query: {query}')
+
+    # Adding structured retrieval logging
+    logging.debug('===========================\nSTRUCTURED SEARCH\n===========================')
+    # SQL and parameters would be logged here
+    logging.debug('SQL executed: {structured_sql}')
+    logging.debug('Parameters: {parameters}')
+    logging.debug('Rows returned: {rows_returned}')
+    logging.debug('Returned records: {record_list}')
+
+    # Adding BM25 logging
+    logging.debug('===========================\nBM25\n===========================')
+    logging.debug('Top 10 documents: {top_bm25_documents}')
+    logging.debug('Scores: {bm25_scores}')
+
+    # Adding vector search logging
+    logging.debug('===========================\nVECTOR SEARCH\n===========================')
+    logging.debug('Top 10 chunks: {top_vector_chunks}')
+    logging.debug('Similarity scores: {vector_scores}')
+
+    # Adding RRF logging
+    logging.debug('===========================\nRRF\n===========================')
+    logging.debug('Merged ranking: {rrf_output}')
+
+    # Adding cross-encoder logging
+    logging.debug('===========================\nCROSS ENCODER\n===========================')
+    logging.debug('Reranked results: {reranked_results}')
+
+    # Adding final context logging
+    logging.debug('===========================\nFINAL CONTEXT\n===========================')
+    logging.debug('Context sent to GPT: {final_context}')
+
+    # Adding prompt logging
+    logging.debug('===========================\nPROMPT\n===========================')
+    logging.debug('Exact prompt: {final_prompt}')
+
+    # Adding GPT response logging
+    logging.debug('===========================\nGPT RESPONSE\n===========================')
+    logging.debug('Raw response: {gpt_raw_response}')
+
+    # Adding citation logging
+    logging.debug('===========================\nCITATION\n===========================')
+    logging.debug('Citation URL: {citation_url}')
+    logging.debug('Retrieved date: {retrieved_date}')
 import os
 import sqlite3
 import re
@@ -3947,6 +3996,55 @@ def _policy_number_shape(question):
     return match.group(1) if match else None
 
 
+def _policy_body(url):
+    """Reconstruct the full policy body text for a policy page URL from
+    the main chunk collection.
+
+    policies.db deliberately stores only (policy_number, policy_title,
+    source_url) - the body is not duplicated there, it stays in the
+    normal crawl -> scrape -> clean -> chunk -> ChromaDB pipeline (see
+    load_policies.py), which is exactly where it is fetched from here.
+    Chunks for one page carry sequential integer ids (build_vector_db.py
+    assigns a global counter in crawl order), so the body is rebuilt by
+    concatenating them in id order. Leading navigation and the trailing
+    cookie banner that every scraped page carries are trimmed off.
+
+    Returns "" when the page has no chunks - the caller then falls back
+    to the title-only stub, preserving today's behaviour."""
+
+    try:
+        result = collection.get(where={"url": url})
+    except Exception:
+        return ""
+
+    ids = result.get("ids") or []
+    docs = result.get("documents") or []
+
+    if not docs:
+        return ""
+
+    def _id_key(pair):
+        try:
+            return int(pair[0])
+        except (TypeError, ValueError):
+            return float("inf")
+
+    text = "\n".join(doc for _, doc in sorted(zip(ids, docs), key=_id_key))
+
+    # Identical leading navigation on every page ends at the "Print |
+    # PDF" marker that sits immediately before the real body.
+    lead = text.find("Print | PDF")
+    if lead != -1:
+        text = text[lead + len("Print | PDF"):]
+
+    # Trailing cookie banner common to every scraped page.
+    banner = text.find("We use cookies on this site")
+    if banner != -1:
+        text = text[:banner]
+
+    return text.strip()
+
+
 def search_policy(question, memory=None):
 
     if not POLICIES_DB_READY:
@@ -3974,8 +4072,20 @@ def search_policy(question, memory=None):
                 "search_policy",
             )
 
+        body = _policy_body(row["source_url"])
+
+        if body:
+            content = (
+                f"Policy {row['policy_number']}: {row['policy_title']}\n\n"
+                f"{body}"
+            )
+        else:
+            content = (
+                f"Policy {row['policy_number']}: {row['policy_title']}"
+            )
+
         return (
-            f"Policy {row['policy_number']}: {row['policy_title']}",
+            content,
             row["source_url"],
             "policy"
         )

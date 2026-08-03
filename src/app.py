@@ -965,7 +965,20 @@ def _finalize_response(query, answer, source, response_type, memory):
     st.session_state.messages, so a caller that needs it (none do
     today) could inspect it further."""
 
-    source = citation.build_citation(source, response_type, answer)
+    # The relevance-disclaimer check inside build_citation() only makes
+    # sense for LLM-phrased answers: it reads the answer's OWN words for
+    # hedging ("the retrieved page doesn't actually address that").
+    # Deterministic response types are never LLM-phrased - their answer
+    # IS the authoritative source text, so running the check on it can
+    # false-positive on legitimate phrases that happen to match the
+    # negation+info pattern (confirmed live: policy bodies saying "does
+    # not provide" / "no information is available" silently dropped the
+    # policy citation). Skip the check for those types.
+    source = citation.build_citation(
+        source,
+        response_type,
+        answer if response_type not in DETERMINISTIC_RESPONSE_TYPES else None
+    )
 
     summary = generate_grounded_summary(
         query,
