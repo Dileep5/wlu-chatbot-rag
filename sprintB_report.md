@@ -1,7 +1,7 @@
 # Sprint B — Gemini-style Answer Generation (Low Risk)
 
 **Status:** Implementation + verification complete. Regression passes — committed automatically.
-**Commit:** `TBD` (set after commit).
+**Commit:** `2a6d9cb`
 
 ---
 
