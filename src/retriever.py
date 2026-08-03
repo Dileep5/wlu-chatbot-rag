@@ -4840,14 +4840,15 @@ _TYPE_HINTED_PATTERNS = [
     (re.compile(r"\bthe program\b", re.IGNORECASE), "program"),
 ]
 
-# "they"/"them"/"she"/"he"/"her"/"him" most commonly refer to a person
-# in English, so faculty is tried first, falling back to the standard
-# priority below only if no faculty is on record.
+# "they"/"them"/"she"/"he"/"his"/"her"/"him" most commonly refer to a
+# person in English, so faculty is tried first, falling back to the
+# standard priority below only if no faculty is on record.
 _PERSON_HINTED_PATTERNS = [
     re.compile(r"\bthey\b", re.IGNORECASE),
     re.compile(r"\bthem\b", re.IGNORECASE),
     re.compile(r"\bshe\b", re.IGNORECASE),
     re.compile(r"\bhe\b", re.IGNORECASE),
+    re.compile(r"\bhis\b", re.IGNORECASE),
     re.compile(r"\bher\b", re.IGNORECASE),
     re.compile(r"\bhim\b", re.IGNORECASE),
 ]
@@ -4898,6 +4899,22 @@ _CLARIFICATION_MESSAGES = {
 _GENERIC_CLARIFICATION_MESSAGE = (
     "I'm not sure what you're referring to. Could you clarify or "
     "provide a bit more detail?"
+)
+
+# Cold-start follow-up phrases ("tell me more", "explain", "show me",
+# ...) carry no topic of their own - they only mean anything once
+# FOLLOWUP MEMORY (structured_search) has an established entity to
+# substitute for them. With nothing ever established in the
+# conversation, hybrid_search's vector fallback would otherwise answer
+# confidently from whatever chunk happens to be nearest by embedding
+# distance (confirmed live: a cold-start "tell me more" produced a
+# confident answer about an unrelated sexual-violence-response page),
+# exactly the fabricated-topic failure the _is_referentless_query gate
+# above already blocks for bare "it"/"this"/"that" queries.
+_FOLLOWUP_NO_CONTEXT_MESSAGE = (
+    "It looks like you're following up on something from earlier in "
+    "our conversation, but I don't have any prior context to draw on "
+    "yet. Could you ask your full question?"
 )
 
 
@@ -5352,6 +5369,29 @@ def hybrid_search(question, memory=None):
         })
 
         return (_GENERIC_CLARIFICATION_MESSAGE, None, "not_found")
+
+    # Cold-start follow-up phrase with no established memory context
+    # (see _FOLLOWUP_NO_CONTEXT_MESSAGE's comment): same rationale as
+    # the referentless gate above, but for the FOLLOWUP_PHRASES set
+    # rather than reference markers. Guarded on the shared
+    # _memory_has_any_context() so a follow-up AFTER a real turn keeps
+    # working exactly as before - structured_search()'s own FOLLOWUP
+    # MEMORY rewrite has already failed above precisely because there
+    # is no entity to substitute, so reaching this point means the
+    # phrase genuinely has nothing to refer to.
+    if (
+        (memory is None or not _memory_has_any_context(memory))
+        and normalize_followup_text(question) in FOLLOWUP_PHRASES
+    ):
+
+        hybrid_rerank.record_debug_trace({
+            "question": question,
+            "structured_retrieval_used": False,
+            "gate_passed": False,
+            "cold_followup_no_context": True,
+        })
+
+        return (_FOLLOWUP_NO_CONTEXT_MESSAGE, None, "not_found")
 
     # VECTOR SEARCH
 
