@@ -3604,6 +3604,72 @@ def _apply_topical_mismatch_penalty(candidates, question_words):
         candidates, key=lambda c: c["cross_encoder_score"], reverse=True
     )
 
+# FAQ intent - a question that explicitly asks for "the FAQ(s)" for a
+# topic is asking for the topic's FAQ page, not for the topic's
+# program/department profile. FAQ content lives only in the scraped
+# document corpus (e.g. .../faq.html, .../faqs.html); the structured
+# cascade cannot produce it, and its program/department branches would
+# instead match the topic itself - confirmed live: "What frequently
+# asked questions exist about MSW program requirements?", "What FAQs
+# exist about music program and course offerings?" and "What FAQs exist
+# for the Social Work professional development offerings?" each returned
+# the matching program (or department) profile instead of the topic's
+# FAQ page, which hybrid/vector retrieval finds directly. The pattern
+# gates BOTH the deferral guard in structured_search() and the FAQ-page
+# boost in _apply_faq_intent_boost() below.
+_FAQ_INTENT_PATTERN = re.compile(
+    r"\bfaqs?\b|\bfrequently\s+asked\s+questions\b",
+    re.IGNORECASE,
+)
+
+# FAQ intent page boost. The cross-encoder alone is not a reliable judge
+# of WHICH page is "the FAQ page" when the question itself asks for one:
+# confirmed live (FAQ_003, "What are the FAQs for Sussex LLB
+# applicants?"), the actual Sussex LLB FAQ page was the #1 BM25 and #2
+# dense candidate, but the program-specific topical-mismatch penalty
+# above demoted it by 6.0 (its URL sits under /programs/interdisciplinary/,
+# and that penalty reads only the first path segment as the page's
+# subject, so "sussex"/"llb" in the question never matched it), while the
+# residence-page "Living Learning Program" chunk (which merely happens to
+# mention the Laurier-Sussex cluster) won. When the question has explicit
+# FAQ intent AND a candidate's URL/title marks it as an FAQ page, the FAQ
+# page is unambiguously the requested source, so it gets a boost large
+# enough to win outright (same magnitude convention as the penalties
+# above). Gated on _FAQ_INTENT_PATTERN, so a non-FAQ question is never
+# affected - the inverse case (a GENERAL question that happens to surface
+# a program's own FAQ page) is still handled by the program-specific
+# penalty above, which fires exactly when the question does NOT name the
+# program's subject.
+_FAQ_PAGE_INTENT_BOOST = 6.0
+
+
+def _apply_faq_intent_boost(candidates, question):
+    """When `question` has explicit FAQ intent (see _FAQ_INTENT_PATTERN),
+    raises cross_encoder_score by _FAQ_PAGE_INTENT_BOOST for every
+    candidate whose URL or title marks it as an FAQ page, then re-sorts.
+    Same in-place + re-sort contract as _apply_topical_mismatch_penalty();
+    a no-op (returns `candidates` untouched) when the question has no FAQ
+    intent."""
+
+    if not _FAQ_INTENT_PATTERN.search(question):
+        return candidates
+
+    for candidate in candidates:
+
+        url = candidate.get("url") or ""
+        title = candidate.get("title") or ""
+
+        if (
+            "faq" in url.lower()
+            or "faq" in title.lower()
+            or "frequently asked" in title.lower()
+        ):
+            candidate["cross_encoder_score"] += _FAQ_PAGE_INTENT_BOOST
+
+    return sorted(
+        candidates, key=lambda c: c["cross_encoder_score"], reverse=True
+    )
+
 # Weighted well above the boilerplate/news penalties above so a genuine
 # title/URL topic match always outranks a merely-shorter-distance,
 # topically-unrelated page (calibrated live: without this, e.g. "Mars"-
@@ -4161,6 +4227,19 @@ def structured_search(question, memory=None):
         # reliably re-trigger it.
         elif (policy_entity := _latest_entity_of_type(memory, "policy")):
             question = f"policy {policy_entity['entity_id']}"
+
+    # FAQ INTENT
+    # Defer to hybrid/vector retrieval. An explicit "what are the FAQs
+    # for X?" question asks for X's FAQ page, which the structured
+    # cascade can never produce - its PROGRAM/DEPARTMENT branches would
+    # instead match X itself (see _FAQ_INTENT_PATTERN's comment for the
+    # confirmed live cases). Checked on the ORIGINAL question (before
+    # any follow-up substitution above), so a memory follow-up never
+    # loses its remembered entity on this account; only genuinely
+    # FAQ-naming questions are deflected. Mirrors the Sprint 2
+    # department-intent guard's deferral pattern.
+    if _FAQ_INTENT_PATTERN.search(question_lower):
+        return None
 
     # FACULTY COURSES TAUGHT
     # Must run before the plain COURSE lookup below: "Who has taught
@@ -5234,6 +5313,13 @@ def hybrid_search(question, memory=None):
     reranked = _apply_topical_mismatch_penalty(
         reranked, _significant_question_words(question)
     )
+
+    # See _apply_faq_intent_boost(): when the question explicitly asks for
+    # "the FAQ(s)" for a topic, a candidate whose URL/title marks it as an
+    # FAQ page wins by construction - the cross-encoder (and the topical-
+    # mismatch penalty above) do not reliably identify the FAQ page for a
+    # question that names its topic. No-op for every non-FAQ question.
+    reranked = _apply_faq_intent_boost(reranked, question)
 
     winner = reranked[0]
 
