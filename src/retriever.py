@@ -4526,16 +4526,37 @@ _PERSON_HINTED_PATTERNS = [
     re.compile(r"\bhim\b", re.IGNORECASE),
 ]
 
+# "this"/"that"/"these"/"those" immediately followed by a word that
+# names the INSTITUTION ITSELF (not any of the four tracked sub-entity
+# types) is a determiner phrase referring to WLU as a whole - "this
+# university", "that campus" - never a genuine reference back to an
+# established course/program/department/faculty member. Confirmed
+# live: after establishing the Master of Applied Computing program as
+# context, "events in this university" incorrectly resolved by
+# substituting the established program's name in for "this" (the
+# generic fallback substitution below has no way to know "university"
+# was the actual referent, not the program), producing a completely
+# unrelated program card for a question that was never about that
+# program at all - a query with no real reference signal getting
+# colored by stale entity context. "this course"/"this program"/etc.
+# (a real reference to one of the four tracked types) are deliberately
+# NOT excluded here - only the institution-level nouns below are,
+# since those are never resolvable against any of the four memory
+# slots to begin with.
+_INSTITUTION_REFERENCE_EXCLUSION = (
+    r"(?!\s+(?:university|school|college|campus|institution)\b)"
+)
+
 # Bare, type-agnostic references - tried against each memory slot in the
 # same priority order structured_search() already uses for the
 # follow-up-phrase mechanism.
 _GENERIC_REFERENCE_PATTERNS = [
     re.compile(r"\bit\b", re.IGNORECASE),
     re.compile(r"\bits\b", re.IGNORECASE),
-    re.compile(r"\bthat\b", re.IGNORECASE),
-    re.compile(r"\bthis\b", re.IGNORECASE),
-    re.compile(r"\bthose\b", re.IGNORECASE),
-    re.compile(r"\bthese\b", re.IGNORECASE),
+    re.compile(rf"\bthat\b{_INSTITUTION_REFERENCE_EXCLUSION}", re.IGNORECASE),
+    re.compile(rf"\bthis\b{_INSTITUTION_REFERENCE_EXCLUSION}", re.IGNORECASE),
+    re.compile(rf"\bthose\b{_INSTITUTION_REFERENCE_EXCLUSION}", re.IGNORECASE),
+    re.compile(rf"\bthese\b{_INSTITUTION_REFERENCE_EXCLUSION}", re.IGNORECASE),
 ]
 
 _DEFAULT_TYPE_PRIORITY = ["course", "program", "department", "faculty"]

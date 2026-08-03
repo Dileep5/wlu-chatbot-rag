@@ -724,6 +724,76 @@ FOLLOWUP_SUGGESTIONS = {
 }
 
 
+def _is_redundant_full_card_repeat(query, context):
+    """True when a "tell me more"/"show me"/etc. follow-up (already in
+    FOLLOWUP_PHRASES) resolves to the exact same card content the
+    immediately preceding assistant message already showed in full -
+    the free-text equivalent of clicking an already-clicked "Show full
+    details" button. Confirmed live: structured_search()'s own
+    FOLLOWUP MEMORY rewrite has no way to know the entity it's re-
+    resolving was already shown in full one turn ago, so it happily
+    returns the identical card content again as a brand new, fully
+    duplicate message.
+
+    Deliberately scoped to FOLLOWUP_PHRASES specifically, not "any
+    query that happens to resolve to the same card" - a user directly
+    re-asking "What is CP312?" verbatim is a different, legitimate
+    case (maybe they forgot, or want to double check), not the
+    "already clicked, clicked again" pattern this guards against.
+
+    Also scoped to _CARD_ON_REQUEST_TYPES specifically - confirmed
+    live this matters: response types outside the answer-first
+    redesign (e.g. "policy") always have show_card=True and never
+    withhold anything to begin with, so "tell me more" re-resolving
+    the same policy is the SAME already-tested, legitimate re-confirm
+    behavior it's always had - not a redundant repeat of a reveal that
+    never happened. An earlier, broader version of this check (any
+    show_card=True response type) caught that case too and broke a
+    real benchmark question (Policy 12.2 follow-up) that specifically
+    exercises this.
+
+    Scans backward for the most recent assistant message with a real
+    response_type, not just messages[-2] - confirmed live this matters
+    too: a first redundant "more" correctly gets the acknowledgment
+    below (response_type=None), but a SECOND consecutive "more" right
+    after that would then see messages[-2] as the acknowledgment
+    itself (response_type=None, never in _CARD_ON_REQUEST_TYPES) and
+    incorrectly conclude nothing was ever shown, re-revealing the same
+    card a second time. Skipping past acknowledgment/off-topic/
+    conversational messages (response_type=None) to the last message
+    that actually resolved to something keeps this a genuine one-way
+    reveal no matter how many times "more" is repeated, not just once.
+    The search still starts one position back (index -2, not -1) for
+    the same reason as before: the current query's own "user" message
+    is already appended to st.session_state.messages by the time this
+    runs."""
+
+    if normalize_followup_text(query) not in FOLLOWUP_PHRASES:
+        return False
+
+    messages = st.session_state.messages
+
+    last = None
+
+    for candidate in reversed(messages[:-1]):
+
+        if candidate["role"] != "assistant":
+            continue
+
+        if candidate.get("response_type") is not None:
+            last = candidate
+            break
+
+    if last is None:
+        return False
+
+    return bool(
+        last.get("response_type") in _CARD_ON_REQUEST_TYPES
+        and last.get("show_card")
+        and last.get("content") == context.strip()
+    )
+
+
 def _capture_followup_context(memory):
     """Snapshots the entity identifiers a follow-up BUTTON might need,
     immediately after generating an answer - not "whatever's in memory
@@ -977,7 +1047,24 @@ def _render_followup_buttons(message_index, message):
             continue
 
         if suggestion["action"] == "reveal_card":
+
             message["show_card"] = True
+
+            # Confirmed live: without this, the "Show full details"
+            # button stayed in `followup` unchanged after being
+            # clicked, so it kept reappearing (now next to an already-
+            # fully-shown card) and clicking it again was a no-op
+            # re-render, not a one-way reveal. Replaced with whatever
+            # FOLLOWUP_SUGGESTIONS actually maps to this response_type
+            # once the card IS shown - the exact same computation
+            # _finalize_response() does when show_card is True from the
+            # start - or None if there isn't one, rather than leaving a
+            # stale action behind.
+            message["followup"] = (
+                FOLLOWUP_SUGGESTIONS.get(message.get("response_type"))
+                if message.get("response_type") else None
+            )
+
             st.rerun()
             return
 
@@ -2162,13 +2249,25 @@ if query:
 
             context, source, response_type = structured
 
-            answer = (
-                generate_answer(
-                    query,
-                    context,
-                    response_type
+            if _is_redundant_full_card_repeat(query, context):
+
+                answer = (
+                    "You're already seeing the full details for that - "
+                    "let me know if there's something else you'd like "
+                    "to know!"
                 )
-            )
+                source = None
+                response_type = None
+
+            else:
+
+                answer = (
+                    generate_answer(
+                        query,
+                        context,
+                        response_type
+                    )
+                )
 
         # unresolved contextual reference ("it", "that professor", "the
         # second one", ...) - checked only once structured_search has
