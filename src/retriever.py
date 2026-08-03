@@ -3670,6 +3670,119 @@ def _apply_faq_intent_boost(candidates, question):
         candidates, key=lambda c: c["cross_encoder_score"], reverse=True
     )
 
+# Canonical section intent. WLU's service/administrative content
+# (academic deadlines & petitions, campus services, student support &
+# wellness) is organized into distinct canonical URL sections on
+# students.wlu.ca:
+#   /calendars-and-petitions/  - dates, deadlines, add/drop, withdraw,
+#                                petitions, appeals, graduation, exams
+#   /campus-services/          - parking, OneCard, dining, residence,
+#                                wifi, safety, study spaces, ...
+#   /support-and-wellness/     - international students, mental health,
+#                                accessibility, Indigenous, Dean of
+#                                Students, counselling, ...
+# The cross-encoder reliably RANKS relevant pages but does not know this
+# section taxonomy: for many service/administrative questions it picks a
+# winning page from the corporate wlu.ca site (governance, discover-
+# laurier, strategic-initiatives, future-students) or a sibling
+# students.wlu.ca section (finances, academics, campus-services) even
+# when the question's canonical section page exists in the corpus -
+# confirmed live across 20 Academic Deadlines / Campus Services /
+# Student Services benchmark items that all answered correctly but cited
+# a page outside their benchmark's canonical section. First match wins;
+# a question naming none of these sections is left untouched. Gated on
+# _FAQ_INTENT_PATTERN so an FAQ question - already handled by
+# _apply_faq_intent_boost() - is never double-preferred.
+_SECTION_INTENT_PATTERNS = [
+    (re.compile(
+        r"\b(deadlines?|due|add\s*/\s*drop|withdraw|petitions?|appeals?|"
+        r"appealing|academic\s+calendars?|term\s+(?:starts?|begins?)|"
+        r"exam-?related|graduation|registration|important\s+dates?|"
+        r"last\s+day\s+to\s+drop)",
+        re.IGNORECASE,
+    ), "/calendars-and-petitions/"),
+    (re.compile(
+        r"\b(parking|onecard|dining|study\s+spaces?|residenc|"
+        r"tech\s+services?|sustainab|classroom|cycling|transit|labs?|"
+        r"equipment|special\s+constable|electric\s+vehicle|wifi|wi-fi|"
+        r"wireless|accounts?|campus\s+safety|lounge|housing)",
+        re.IGNORECASE,
+    ), "/campus-services/"),
+    (re.compile(
+        r"\b(international\s+students?|mental\s+health|wellness|"
+        r"accessible\s+learning|indigenous|dean\s+of\s+students|"
+        r"athletics|recreation|gendered\s+violence|sexual\s+violence|"
+        r"orientation|diversity|equity|immigration|counsell|counseling|"
+        r"disabilit|racialized|2slgbtq|advising)",
+        re.IGNORECASE,
+    ), "/support-and-wellness/"),
+]
+
+# Canonical section intent boost. When the question's vocabulary names a
+# canonical section (above), a candidate whose URL lives in that section
+# is very likely the requested source - the cross-encoder does not know
+# WLU's section taxonomy and demonstrably picks wrong-section winners
+# (see _SECTION_INTENT_PATTERNS' comment). The magnitude matches the
+# penalties' convention and is calibrated live: +5.0, not +3.0, was
+# required for DEADLINE_016, whose in-pool important-dates chunks score
+# -4.2 to -9.9 after the cross-encoder's boilerplate/nav demotion.
+_CANONICAL_SECTION_INTENT_BOOST = 5.0
+
+# When the canonical section's pages are NOT already in the fused pool
+# (the dense/BM25 top-k truncated them out), merge the section's top
+# BM25-scoring chunks into the pool so the boost has a target. See
+# hybrid_search()'s merge block.
+_CANONICAL_SECTION_MERGE_TOP_K = 3
+
+# "Dean of Students" must defer to hybrid/vector retrieval (its page
+# lives under /support-and-wellness/): structured_search()'s FACULTY
+# branch would otherwise catch the capitalized title token "Dean" as a
+# faculty member's last name and return professor Jason Dean's profile
+# instead of the Dean of Students office page (confirmed live:
+# STUDENTSVC_006). Same deferral pattern as the FAQ guard in
+# structured_search().
+_DEAN_OF_STUDENTS_PATTERN = re.compile(
+    r"\bdean\s+of\s+students\b", re.IGNORECASE,
+)
+
+
+def _match_canonical_section(question):
+    """Return the canonical-section URL fragment named by `question`'s
+    vocabulary (first pattern match wins), or None. FAQ-intent questions
+    are excluded here so they keep their own FAQ-page boost path
+    (_apply_faq_intent_boost)."""
+
+    if _FAQ_INTENT_PATTERN.search(question):
+        return None
+
+    for pattern, section in _SECTION_INTENT_PATTERNS:
+        if pattern.search(question):
+            return section
+
+    return None
+
+
+def _apply_canonical_section_preference(reranked, question):
+    """When `question` names a canonical section (see
+    _match_canonical_section), raises cross_encoder_score by
+    _CANONICAL_SECTION_INTENT_BOOST for every candidate whose URL lives
+    in that section, then re-sorts. Same in-place + re-sort contract as
+    _apply_faq_intent_boost(); a no-op when no section is named or the
+    question has FAQ intent."""
+
+    section = _match_canonical_section(question)
+
+    if not section:
+        return reranked
+
+    for candidate in reranked:
+        if section in (candidate.get("url") or ""):
+            candidate["cross_encoder_score"] += _CANONICAL_SECTION_INTENT_BOOST
+
+    return sorted(
+        reranked, key=lambda c: c["cross_encoder_score"], reverse=True
+    )
+
 # Weighted well above the boilerplate/news penalties above so a genuine
 # title/URL topic match always outranks a merely-shorter-distance,
 # topically-unrelated page (calibrated live: without this, e.g. "Mars"-
@@ -4239,6 +4352,17 @@ def structured_search(question, memory=None):
     # FAQ-naming questions are deflected. Mirrors the Sprint 2
     # department-intent guard's deferral pattern.
     if _FAQ_INTENT_PATTERN.search(question_lower):
+        return None
+
+    # DEAN OF STUDENTS
+    # Defer to hybrid/vector retrieval. "Who is the Dean of Students and
+    # what do they do?" asks about the Dean of Students ROLE/office, whose
+    # page lives under /support-and-wellness/, but search_faculty()'s
+    # tiered last-name matching catches the capitalized title token "Dean"
+    # as a faculty member's last name and returns professor Jason Dean's
+    # profile instead (confirmed live: STUDENTSVC_006). Same deferral
+    # pattern as the FAQ guard above; checked on the original question.
+    if _DEAN_OF_STUDENTS_PATTERN.search(question_lower):
         return None
 
     # FACULTY COURSES TAUGHT
@@ -5301,7 +5425,50 @@ def hybrid_search(question, memory=None):
 
     fused = hybrid_rerank.reciprocal_rank_fusion(dense_candidates, bm25_candidates)
 
-    reranked = hybrid_rerank.cross_encoder_rerank(question, fused)
+    # Canonical-section intent (see _SECTION_INTENT_PATTERNS /
+    # _apply_canonical_section_preference): when the question names a
+    # service/administrative section and none of that section's pages
+    # made it into the fused pool, merge the section's top BM25-scoring
+    # chunks directly (a section-restricted search over the same BM25
+    # index - no fresh Chroma query) so the section boost below has a
+    # target. Without this, e.g. the disability-justice-and-accessibility
+    # page behind STUDENTSVC_004/014 is never retrieved by the dense/BM25
+    # top-k at all. Merged chunks are pinned just above the pool's current
+    # top fused score so the cross-encoder still judges them on merit.
+    section = _match_canonical_section(question)
+
+    if section is not None and not any(
+        section in (candidate.get("url") or "") for candidate in fused
+    ):
+
+        section_candidates = hybrid_rerank.bm25_search_in_section(
+            collection, question, section,
+            top_k=_CANONICAL_SECTION_MERGE_TOP_K,
+        )
+
+        base_score = fused[0]["fused_score"] if fused else 0.0
+
+        for candidate in section_candidates:
+            candidate["fused_score"] = base_score + 0.001
+            fused.append(candidate)
+
+    if section is None:
+
+        # No section intent - the EXACT pre-Sprint4 pipeline (top-k
+        # cross-encoder rerank, then penalties/boosts), so no question
+        # that names none of the canonical sections changes behavior at
+        # all (regression guard).
+        reranked = hybrid_rerank.cross_encoder_rerank(question, fused)
+
+    else:
+
+        # Section intent - score the FULL fused pool instead of the top-k
+        # truncation, because the cross-encoder truncation at RERANK_TOP_K
+        # would otherwise hide ranks 11+ from every subsequent boost (e.g.
+        # DEADLINE_016's important-dates page sat in the pool at rank 11+
+        # and lost on raw score alone). The established penalties/boosts
+        # and the section preference below then run over the whole pool.
+        reranked = hybrid_rerank.cross_encoder_rerank(question, fused, top_k=None)
 
     # See _apply_topical_mismatch_penalty()'s own comment: the cross-
     # encoder alone confidently picked a narrow, topically-mismatched
@@ -5320,6 +5487,21 @@ def hybrid_search(question, memory=None):
     # mismatch penalty above) do not reliably identify the FAQ page for a
     # question that names its topic. No-op for every non-FAQ question.
     reranked = _apply_faq_intent_boost(reranked, question)
+
+    # See _apply_canonical_section_preference(): when the question names
+    # a canonical service/administrative section, a candidate from that
+    # section wins by preference - the cross-encoder does not know WLU's
+    # section taxonomy and demonstrably picks wrong-section winners for
+    # deadlines/campus/student-services questions (see its comment). No-op
+    # for every question that names no canonical section or has FAQ intent.
+    reranked = _apply_canonical_section_preference(reranked, question)
+
+    if section is not None:
+        # Restore the cross-encoder's own top-k contract. The same-page
+        # context loop below iterates the full `fused` pool (including any
+        # merged section candidates), so the winner's chunks are still
+        # found after this truncation.
+        reranked = reranked[:hybrid_rerank.RERANK_TOP_K]
 
     winner = reranked[0]
 

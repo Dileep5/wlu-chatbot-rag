@@ -140,12 +140,26 @@ def _retrieval_date():
         return datetime.now(timezone.utc).strftime(_DATE_DISPLAY_FORMAT)
 
 
-# Reused from benchmark_runner.py's own _NEGATED_INFO_AVAILABILITY_
-# PATTERN (a negation next to a word about information being present/
-# documented/stated), already tuned there across many real grounded
-# answers - the 0-2 word gap and excluding "cover(s/ed)" are both
-# deliberate: a wider gap or "cover" both let the pattern reach across
-# an unrelated clause and false-positive on a genuinely confident,
+# Sprint 4: the negation must be about the retrieved SOURCE's contents,
+# not a real-world factual statement inside an otherwise-confident
+# answer. The original unanchored pattern (shared with benchmark_runner.py,
+# which still uses its own unanchored copy for decline detection) read
+# "does not include" in "...$2.00 per hour for use via the Flo app
+# (does not include parking fees)" - a fully on-topic EV-charging answer
+# (CAMPUS_012) - as the LLM disclaiming relevance and suppressed the
+# citation. Anchoring to an explicit source reference ("the retrieved
+# information does not provide...", "this page does not mention...")
+# keeps every genuine self-disclaimer (FAQ_009: "The retrieved
+# information does not explicitly provide a list of FAQs") while letting
+# factual negations about subjects like fees, courses, or programs pass.
+# The bare "no <source-content noun>" form ("There is no information
+# about...", "no details were available") names the source's contents
+# directly and needs no preceding source noun, so it is preserved as a
+# second branch - a strict subset of the words the original unanchored
+# pattern already matched, so no answer that previously rendered a
+# citation loses one. The 0-2 word gap and excluding "cover(s/ed)" stay
+# deliberate (see the original comment): a wider gap or "cover" both
+# reach across an unrelated clause and false-positive on a confident,
 # correct answer ("CP312 does not require any prerequisites and covers
 # algorithm design.").
 _INFO_AVAILABILITY_WORDS = (
@@ -155,9 +169,21 @@ _INFO_AVAILABILITY_WORDS = (
     r"indicate[sd]?|available|found|information|details|data|specifics?"
 )
 _NEGATED_INFO_AVAILABILITY_PATTERN = re.compile(
-    r"\b(?:does\s+not|doesn't|do\s+not|don't|did\s+not|didn't|"
-    r"cannot|can't|unable\s+to|no)\b"
-    rf"(?:\s+\w+){{0,2}}\s+(?:{_INFO_AVAILABILITY_WORDS})\b",
+    # Part A - negation anchored to an explicit source reference:
+    #   [optional article] [optional source adjective] [source noun]
+    #   [negation] [0-2 gap words] [availability word]
+    r"\b(?:the|this|that|these|those)?\s*"
+    r"(?:retrieved|provided|given|returned|cited|found|above|linked|"
+    r"displayed|shown|relevant)?\s*"
+    r"(?:information|info|content|page|source|document|website|"
+    r"webpage|site|resource|result|answer|guide|article|material|"
+    r"section)s?\s+"
+    r"(?:does\s+not|doesn't|do\s+not|don't|did\s+not|didn't|cannot|"
+    r"can't|unable\s+to|no)\b"
+    rf"(?:\s+\w+){{0,2}}\s+(?:{_INFO_AVAILABILITY_WORDS})\b"
+    # Part B - bare "no <source-content noun>": the noun itself names the
+    # source's contents, no preceding source reference needed.
+    r"|\bno\s+(?:information|details?|data|mention|indication)\b",
     re.IGNORECASE
 )
 

@@ -133,6 +133,54 @@ def bm25_search(collection, question, top_k=BM25_TOP_K):
     return candidates
 
 
+def bm25_search_in_section(collection, question, url_fragment, top_k):
+
+    """Restrict the existing BM25 index to chunks whose URL contains
+    `url_fragment` (a canonical-section path segment like
+    "/support-and-wellness/") and return the top-`top_k` scoring chunks.
+    Used by retriever.hybrid_search() to pull a canonical section's pages
+    into the fused pool when the dense/BM25 top-k never retrieved them
+    (e.g. the disability-justice-and-accessibility page behind
+    STUDENTSVC_004/014). Reuses the same lazily-rebuilt index as
+    bm25_search(), so it stays consistent with refresh_pipeline.py
+    without a fresh Chroma query or a second metadata filter pass."""
+
+    state = _get_bm25_state(collection)
+
+    if not state["chunk_ids"]:
+        return []
+
+    scores = state["index"].get_scores(_tokenize(question))
+
+    section_positions = []
+
+    for position, metadata in enumerate(state["metadatas"]):
+
+        url = (metadata or {}).get("url") or ""
+
+        if url_fragment in url:
+            section_positions.append(position)
+
+    section_positions.sort(key=lambda i: scores[i], reverse=True)
+
+    candidates = []
+
+    for position in section_positions[:top_k]:
+
+        metadata = state["metadatas"][position] or {}
+
+        candidates.append({
+            "id": state["chunk_ids"][position],
+            "document": state["documents"][position],
+            "url": metadata.get("url"),
+            "title": metadata.get("title"),
+            "bm25_score": float(scores[position]),
+            "bm25_section_rank": len(candidates) + 1,
+        })
+
+    return candidates
+
+
 # -----------------------------
 # Dense candidates for fusion - a plain per-chunk conversion of the
 # results search_vector() already fetched (no second Chroma query, no
@@ -233,6 +281,16 @@ def cross_encoder_rerank(question, candidates, top_k=RERANK_TOP_K):
         reranked.append(entry)
 
     reranked.sort(key=lambda c: c["cross_encoder_score"], reverse=True)
+
+    if top_k is None:
+        # Full-pool scoring: retriever.hybrid_search() passes top_k=None
+        # for canonical-section-intent questions so a section-preference
+        # boost (see _apply_canonical_section_preference in retriever.py)
+        # can also see candidates that land at ranks 11+ here - ranks that
+        # the default top_k=RERANK_TOP_K truncation would otherwise hide
+        # from every subsequent boost/penalty. Callers that want the
+        # default truncation keep passing no argument.
+        return reranked
 
     return reranked[:top_k]
 
