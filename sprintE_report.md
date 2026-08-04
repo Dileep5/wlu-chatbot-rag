@@ -1,7 +1,7 @@
 # Sprint E — Intent Planner & Knowledge Aggregation
 
 **Status:** Implementation + verification complete. Regression passes — committed automatically.
-**Commit:** `38a389c`
+**Commit:** `b027681`
 
 ---
 
