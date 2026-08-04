@@ -1,7 +1,7 @@
 # Sprint C — Multi-Document Retrieval & Context Synthesis
 
 **Status:** Implementation + verification complete. Regression passes — committed automatically.
-**Commit:** set after commit
+**Commit:** `13fb447`
 
 ---
 
