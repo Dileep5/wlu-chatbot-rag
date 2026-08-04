@@ -179,10 +179,24 @@ _CARD_CSS = """
     font-weight: 400;
 }
 .wlu-card-footer {
-    background: var(--wlu-paper, #FAF8FC);
+    /* Sprint P2: the source strip is a soft lavender panel (rather than
+       a plain continuation of the card body) so it reads as a distinct,
+       clearly-separated "sources" surface. --wlu-purple-soft is the
+       lightest token in the palette - ink-muted text on it stays
+       ~5.5:1 in light mode (and the dark-mode token override carries
+       the same property to ~8:1), well above the 4.5:1 body-text
+       threshold. */
+    background: var(--wlu-purple-soft, #EFEBF4);
     border-top: 1px solid var(--wlu-border, #E4DCEF);
     padding: var(--wlu-sp-1, 0.5rem) var(--wlu-sp-3, 1.5rem);
     font-size: var(--wlu-fs-caption, 0.8125rem);
+}
+.wlu-card-footer .wlu-source-label-row,
+.wlu-standalone-source .wlu-source-label-row {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-bottom: 0.15rem;
 }
 .wlu-card-footer .wlu-source-label,
 .wlu-standalone-source .wlu-source-label {
@@ -191,7 +205,10 @@ _CARD_CSS = """
     font-size: var(--wlu-fs-micro, 0.75rem);
     font-weight: 700;
     color: var(--wlu-ink-muted, #6B5F7A);
-    margin-right: 0.3rem;
+}
+.wlu-card-footer .wlu-source-label-row .wlu-icon,
+.wlu-standalone-source .wlu-source-label-row .wlu-icon {
+    margin-right: 0;
 }
 .wlu-card-footer a,
 .wlu-standalone-source a {
@@ -214,15 +231,30 @@ _CARD_CSS = """
 }
 .wlu-standalone-source {
     font-size: var(--wlu-fs-caption, 0.8125rem);
-    padding: var(--wlu-sp-1, 0.5rem) 0;
+    padding: var(--wlu-sp-1, 0.5rem) var(--wlu-sp-2, 1rem);
+    margin-top: var(--wlu-sp-1, 0.5rem);
+    background: var(--wlu-purple-soft, #EFEBF4);
+    border: 1px solid var(--wlu-border, #E4DCEF);
+    border-radius: var(--wlu-radius, 16px);
 }
 .wlu-card-footer a,
 .wlu-standalone-source a {
     margin-right: var(--wlu-sp-1, 0.5rem);
 }
+.wlu-source-links {
+    display: inline;
+}
 .wlu-retrieval-date {
+    /* Own line below the source links - small, muted, clock-prefixed -
+       so "Retrieved:" never collides with a long source title. */
+    display: block;
+    margin-top: 0.25rem;
     color: var(--wlu-ink-muted, #6B5F7A);
     font-size: var(--wlu-fs-micro, 0.75rem);
+}
+.wlu-retrieval-date .wlu-icon {
+    margin-right: 0.25rem;
+    vertical-align: -2px;
 }
 .wlu-icon {
     display: inline-flex;
@@ -267,9 +299,10 @@ _CARD_CSS = """
     border-bottom: 1px solid var(--wlu-border, #E4DCEF);
 }
 [class*="st-key-wlu-generic-card-"] .wlu-standalone-source {
-    margin-top: var(--wlu-sp-1, 0.5rem);
-    padding-top: var(--wlu-sp-1, 0.5rem);
-    border-top: 1px solid var(--wlu-border, #E4DCEF);
+    /* The standalone source is already a self-contained rounded panel
+       (see .wlu-standalone-source above) - inside the generic card it
+       only needs the top breathing room, not another border line. */
+    margin-top: var(--wlu-sp-2, 1rem);
 }
 </style>
 """
@@ -355,6 +388,18 @@ def _icon(name):
             '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
             'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
             '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'
+        ),
+        "link": (
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>'
+            '<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>'
+        ),
+        "clock": (
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<circle cx="12" cy="12" r="9"/>'
+            '<path d="M12 7v5l3 2"/></svg>'
         ),
     }
 
@@ -444,7 +489,12 @@ def _citation_links_html(citation):
     """Phase 3: one <a> per source (title as link text, falling back to
     the bare URL when no title could be resolved), followed by the
     citation's single retrieval date - shared by _card_footer_html() and
-    _render_source() so both citation surfaces stay in sync."""
+    _render_source() so both citation surfaces stay in sync.
+
+    Sprint P2: the links are grouped in their own inline row
+    (.wlu-source-links) and the retrieval date carries a small clock
+    glyph and sits on its own line below the links - presentation only;
+    the link text and the "Retrieved: {date}" string are unchanged."""
 
     links = "".join(
         f'<a href="{_esc(entry["url"])}" target="_blank" rel="noopener">'
@@ -453,8 +503,10 @@ def _citation_links_html(citation):
     )
 
     return (
-        f"{links}"
-        f'<span class="wlu-retrieval-date">Retrieved: {_esc(citation["date"])}</span>'
+        f'<span class="wlu-source-links">{links}</span>'
+        f'<span class="wlu-retrieval-date">'
+        f'{_icon("clock")}Retrieved: {_esc(citation["date"])}'
+        f"</span>"
     )
 
 
@@ -465,7 +517,9 @@ def _card_footer_html(citation):
 
     return (
         f'<div class="wlu-card-footer">'
-        f'<span class="wlu-source-label">Source</span>'
+        f'<div class="wlu-source-label-row">'
+        f'{_icon("link")}<span class="wlu-source-label">Source</span>'
+        f"</div>"
         f"{_citation_links_html(citation)}"
         f"</div>"
     )
@@ -510,7 +564,9 @@ def _render_source(citation):
         st.markdown(
             f"{_CARD_CSS}"
             f'<div class="wlu-standalone-source">'
-            f'<span class="wlu-source-label">Source</span>'
+            f'<div class="wlu-source-label-row">'
+            f'{_icon("link")}<span class="wlu-source-label">Source</span>'
+            f"</div>"
             f"{_citation_links_html(citation)}"
             f"</div>",
             unsafe_allow_html=True,

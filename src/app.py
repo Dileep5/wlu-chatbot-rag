@@ -1387,7 +1387,12 @@ def _render_followup_buttons(message_index, message):
 
         button_key = f"followup-{message_index}-{action_index}"
 
-        if not st.button(suggestion["label"], key=button_key):
+        # The "Show full details" reveal is the card's main affordance
+        # and renders as the primary variant (styled in CUSTOM_CSS);
+        # every other follow-up action stays a secondary button.
+        button_type = "primary" if suggestion["action"] == "reveal_card" else "secondary"
+
+        if not st.button(suggestion["label"], key=button_key, type=button_type):
             continue
 
         if suggestion["action"] == "reveal_card":
@@ -1822,6 +1827,15 @@ h1, h2, h3, h4 {
     font-size: var(--wlu-fs-body);
     line-height: 1.6;
 }
+/* A quiet call-to-action under the welcome blurb so first-time users
+   know exactly what to do next (the "Try asking" chips follow). */
+.wlu-welcome .wlu-welcome-hint {
+    margin-top: var(--wlu-sp-2);
+    padding-top: var(--wlu-sp-1);
+    border-top: 1px dashed var(--wlu-border);
+    color: var(--wlu-ink-muted);
+    font-size: var(--wlu-fs-body-sm);
+}
 
 /* Sidebar - a clean, solid dark-purple gradient (no watermark texture),
    matching the solid left panel of WLU's own branded background
@@ -2180,6 +2194,194 @@ div[data-testid="stElementContainer"]:has(.wlu-card)
     color: var(--wlu-ink-muted);
     font-size: var(--wlu-fs-caption);
 }
+
+/* ====================================================================
+   Sprint P2 polish — presentational CSS only.
+   Pure visuals (spacing, typography, tables, follow-up buttons, alerts,
+   reduced-motion, mobile scaling). No logic, no behavior changes.
+   ==================================================================== */
+
+/* ---- Chat rhythm & answer prose --------------------------------- */
+/* Vertical breathing room between turns. The bubble rules above style
+   the box itself; this adds the gap that lets a multi-turn thread read
+   as a sequence rather than a wall. The chat input row provides the
+   final separator, so an extra margin on the last bubble is fine. */
+div[data-testid="stChatMessage"] {
+    margin-bottom: var(--wlu-sp-3, 1.5rem);
+}
+
+/* Consistent prose rhythm inside bubbles: paragraphs keep a clean
+   cadence inside the narrower bubble, and the trailing paragraph of an
+   answer doesn't drag the next element down with a dead margin. */
+div[data-testid="stChatMessage"] p {
+    margin: 0 0 0.7rem;
+    line-height: 1.68;
+}
+div[data-testid="stChatMessage"] p:last-child {
+    margin-bottom: 0;
+}
+
+/* Bold lead-ins ("**Overview**:", "**Key Details**:") that answer
+   markdown uses as de-facto section headings get a quiet accent. Only
+   when the strong is the paragraph's FIRST content, so mid-sentence
+   emphasis stays untouched. */
+div[data-testid="stChatMessage"]:has([aria-label="Chat message from assistant"]) p > strong:first-child {
+    color: var(--wlu-purple-text);
+}
+
+/* ---- Markdown headings inside answers --------------------------- */
+div[data-testid="stChatMessage"] h2,
+div[data-testid="stChatMessage"] h3 {
+    font-family: var(--wlu-font-head);
+    font-weight: 700;
+    line-height: 1.3;
+    color: var(--wlu-purple-text);
+    margin: var(--wlu-sp-3, 1.5rem) 0 var(--wlu-sp-1, 0.5rem);
+}
+div[data-testid="stChatMessage"] h2 { font-size: var(--wlu-fs-h2, 1.25rem); }
+div[data-testid="stChatMessage"] h3 { font-size: 1.125rem; }
+div[data-testid="stChatMessage"] h2:first-child,
+div[data-testid="stChatMessage"] h3:first-child { margin-top: 0; }
+
+/* ---- Markdown tables in answers --------------------------------- */
+/* e.g. the convocation "Key Details" date table. Themed like the rest
+   of the system: soft-purple header row, hairline borders, zebra
+   striping that flips automatically in dark mode via the tokens. */
+div[data-testid="stChatMessage"] table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: var(--wlu-sp-2, 1rem) 0 var(--wlu-sp-3, 1.5rem);
+    font-size: var(--wlu-fs-body-sm, 0.875rem);
+}
+div[data-testid="stChatMessage"] th,
+div[data-testid="stChatMessage"] td {
+    padding: 0.6rem 0.8rem;
+    border: 1px solid var(--wlu-border, #E4DCEF);
+    text-align: left;
+    vertical-align: top;
+}
+div[data-testid="stChatMessage"] th {
+    background: var(--wlu-purple-soft, #EFEBF4);
+    color: var(--wlu-ink);
+    font-family: var(--wlu-font-head);
+    font-weight: 700;
+    border-bottom: 2px solid var(--wlu-border, #E4DCEF);
+}
+div[data-testid="stChatMessage"] tbody tr:nth-child(even) td {
+    background: var(--wlu-paper, #FAF8FC);
+}
+
+/* ---- Follow-up action buttons: wrap as a pill row ---------------- */
+/* The action buttons from _render_followup_buttons land as sibling
+   stButton blocks in the assistant bubble. Flipping them inline makes
+   the set flow as a wrapping row (buttons stay grouped instead of each
+   claiming its own full-width line), with each button keeping the
+   shared .stButton hover/transition from the rules above. */
+div[data-testid="stChatMessage"]:has([aria-label="Chat message from assistant"]) div[data-testid="stButton"] {
+    display: inline-block;
+    margin: var(--wlu-sp-1, 0.5rem) var(--wlu-sp-1, 0.5rem) 0 0;
+    vertical-align: top;
+}
+
+/* "Show full details" reveal — primary emphasis. Solid purple (white
+   text on it is ~10.6:1, WCAG AAA) so the one expandable action reads
+   as the card's main affordance; the trailing chevron hints at the
+   reveal. Dark mode keeps the same fill — on the dark bubble,
+   white-on-purple stays the strongest pair on that surface. */
+div[data-testid="stChatMessage"]:has([aria-label="Chat message from assistant"]) button[data-testid="stBaseButton-primary"] {
+    background: var(--wlu-purple, #522687) !important;
+    border: 1px solid var(--wlu-purple, #522687) !important;
+    color: #FFFFFF !important;
+    font-weight: 600 !important;
+    box-shadow: var(--wlu-shadow-rest, 0 1px 3px rgba(30, 15, 55, 0.12)) !important;
+}
+div[data-testid="stChatMessage"]:has([aria-label="Chat message from assistant"]) button[data-testid="stBaseButton-primary"]:hover {
+    background: var(--wlu-purple-dark, #3E1C66) !important;
+    border-color: var(--wlu-purple-dark, #3E1C66) !important;
+}
+div[data-testid="stChatMessage"]:has([aria-label="Chat message from assistant"]) button[data-testid="stBaseButton-primary"]::after {
+    content: " ▾";
+    font-size: 0.82em;
+    opacity: 0.8;
+}
+
+/* ---- Status alerts (errors / warnings / info) -------------------- */
+/* st.error's message is already non-technical (see _render_error); this
+   restyles the box to match the card system's radius/font instead of
+   Streamlit's default pill. Severity colours are left to Streamlit so
+   a real error still reads as one. */
+div[data-testid="stAlert"] {
+    border-radius: var(--wlu-radius, 16px);
+    font-family: var(--wlu-font-body);
+    font-size: var(--wlu-fs-body-sm, 0.875rem);
+    line-height: 1.6;
+    box-shadow: var(--wlu-shadow-rest, 0 1px 3px rgba(30, 15, 55, 0.12));
+}
+div[data-testid="stAlert"] p { margin: 0; }
+
+/* ---- Typing indicator label ------------------------------------- */
+/* The "Thinking…" label (see the loading block in app.py) sits beside
+   the three pulsing dots and shares their quiet ink-muted accent. */
+.wlu-typing-label {
+    font-size: var(--wlu-fs-caption, 0.8125rem);
+    color: var(--wlu-ink-muted, #6B5F7A);
+    font-weight: 500;
+    margin-left: 0.15rem;
+}
+
+/* ---- Accessibility: respect reduced motion ----------------------- */
+/* Users who disable motion get instant feedback: the fade-up bubble
+   entrance, the pulsing typing dots, and every transition collapse to
+   ~zero duration. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+/* ---- Mobile responsiveness --------------------------------------- */
+/* Narrow screens: shrink the hero and bubbles, keep wide tables
+   horizontally scrollable instead of squeezed, and let the two-column
+   suggested-question grid wrap to a single column. */
+@media (max-width: 768px) {
+    .wlu-hero { padding: var(--wlu-sp-4, 2rem) var(--wlu-sp-3, 1.5rem); }
+    .wlu-hero h1 { font-size: 1.7rem; }
+    .wlu-hero .wlu-tagline { font-size: 1rem; }
+
+    div[data-testid="stChatMessage"] { max-width: 100%; }
+    div[data-testid="stChatMessage"]:has([aria-label="Chat message from user"]) { max-width: 92%; }
+    div[data-testid="stChatMessage"] > div:first-child {
+        width: 34px;
+        height: 34px;
+        margin-top: calc((24.8px - 34px) / 2);
+    }
+
+    /* Wide tables scroll within the bubble rather than pushing the
+       whole answer off the viewport. */
+    div[data-testid="stChatMessage"] table {
+        display: block;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+}
+
+@media (max-width: 480px) {
+    .wlu-hero { padding: var(--wlu-sp-3, 1.5rem) var(--wlu-sp-2, 1rem); }
+    .wlu-hero h1 { font-size: 1.45rem; }
+    .wlu-card { padding: var(--wlu-sp-3, 1.5rem) var(--wlu-sp-2, 1rem); }
+
+    /* Suggested-question grid: single column, full-width buttons. */
+    div[data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
+    div[data-testid="stHorizontalBlock"] div[data-testid="stColumn"] {
+        flex: 0 0 100% !important;
+        max-width: 100% !important;
+    }
+}
 </style>
 """
 
@@ -2327,6 +2529,9 @@ st.markdown(
             requirements, faculty profiles, scholarships, tuition, and
             student services - grounded in real WLU data, not general
             knowledge.
+        </p>
+        <p class="wlu-welcome-hint">
+            💬 Type a question below, or tap a suggested question to get started.
         </p>
     </div>
     """,
@@ -2565,7 +2770,8 @@ if query:
             avatar=ASSISTANT_AVATAR
         ):
             st.markdown(
-                '<div class="wlu-typing"><span></span><span></span><span></span></div>',
+                '<div class="wlu-typing"><span></span><span></span><span></span>'
+                '<span class="wlu-typing-label">Thinking…</span></div>',
                 unsafe_allow_html=True
             )
 
