@@ -1460,26 +1460,58 @@ def _render_followup_buttons(message_index, message):
 
         query_label, context, source, response_type = resolved
 
-        answer = generate_answer(query_label, context, response_type)
+        # Unlike the free-text turn below, this whole branch runs outside
+        # that path's try/except - it fires on every rerun while replaying
+        # PAST messages, not inside the live turn's own guarded block. Before
+        # this try, an OpenAI failure here (rate limit, timeout, transient
+        # network error) crashed the entire script with a raw traceback -
+        # the same class of failure the free-text path already degrades
+        # from gracefully. Mirrors that same friendly-message pattern so a
+        # button click is never worse than typing the identical question.
+        try:
 
-        st.session_state.messages.append(
-            {
-                "role": "user",
-                "content": query_label
-            }
-        )
+            answer = generate_answer(query_label, context, response_type)
 
-        st.session_state.chat_history.append(
-            {
-                "role": "user",
-                "content": query_label
-            }
-        )
+            st.session_state.messages.append(
+                {
+                    "role": "user",
+                    "content": query_label
+                }
+            )
 
-        _finalize_response(
-            query_label, answer, source, response_type,
-            st.session_state.memory
-        )
+            st.session_state.chat_history.append(
+                {
+                    "role": "user",
+                    "content": query_label
+                }
+            )
+
+            _finalize_response(
+                query_label, answer, source, response_type,
+                st.session_state.memory
+            )
+
+        except Exception as e:
+
+            print(f"Unhandled error while resolving button action {suggestion['action']!r}: {e}")
+            traceback.print_exc()
+
+            st.session_state.messages.append(
+                {
+                    "role": "assistant",
+                    "content": (
+                        "Sorry, something went wrong while looking that "
+                        "up. Please try rephrasing your question, or ask "
+                        "again in a moment."
+                    ),
+                    "source": None,
+                    "response_type": None,
+                    "summary": None,
+                    "followup": None,
+                    "followup_context": None,
+                    "show_card": True
+                }
+            )
 
         st.rerun()
         return
