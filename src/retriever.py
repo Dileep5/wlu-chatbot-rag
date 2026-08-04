@@ -5566,6 +5566,267 @@ def _rewrite_query(question):
     return rewritten if rewritten != original else original
 
 
+# ------------------------------------------------------------------
+# Sprint E - Intent Planner & Knowledge Aggregation (free-text path
+# only). Applied INSIDE hybrid_search() AFTER structured_search() has
+# already missed, after the referentless / cold-follow-up gates, after
+# the Sprint D rewrite, and after the winner page + Sprint C secondary
+# sources have been chosen - so:
+#   - structured retrieval, the domain gate, contextual-reference
+#     resolution, winner selection, the distance gate, and the citation
+#     pipeline are ALL untouched (the primary source stays byte-
+#     identical);
+#   - the layer only ADDS labeled, grounded WLU facet pages to the
+#     multi-source context the answer generator already receives.
+#
+# The Planner is deterministic (regex triggers, no LLM). Each intent
+# maps to a small set of FACETS - canonical WLU pages that answer the
+# question from a complementary angle (e.g. "I want a Masters" ->
+# graduate admissions + funding + studies overview; "I'm stressed" ->
+# mental-health resources + urgent care + wellness services). Facet
+# pages are static ground truth: each is a known URL fragment in the
+# corpus, fetched through the existing BM25 index
+# (bm25_search_in_section), so no new embeddings, no external API, no
+# invented facts. The relevance gate is the intent trigger itself (the
+# cross-encoder is uncalibrated for long boilerplate-heavy chunks vs.
+# casual questions - probing showed clearly-relevant facet pages
+# scoring negative), backed by three hard safety filters:
+#   - a facet page is skipped if its URL is already in the source set
+#     (winner or a Sprint C secondary) - never duplicated;
+#   - every facet chunk must survive the Sprint C near-duplicate check
+#     against everything already included - never repeated content;
+#   - every facet must actually exist in the corpus (graceful no-op).
+#
+# A query that fires no intent, or whose facet pages all dedupe/skip,
+# leaves the context byte-identical to the pre-Sprint-E output.
+# ------------------------------------------------------------------
+
+# Per-intent conditional facet triggers. `None` = the facet fires for
+# every question that fires its intent; otherwise the regex must also
+# match (e.g. the urgent-care page only joins a wellness answer when
+# the question actually signals crisis, and the working-in-Canada page
+# only joins an international answer when work is mentioned).
+_IP_INTERNATIONAL_MENTION = re.compile(r"\binternational\b", re.IGNORECASE)
+_IP_WELLNESS_CRISIS = re.compile(
+    r"\b(crisis|urgent|emergency|after[- ]?hours|suicid|988|24/7|24 ?7|immediate)\w*",
+    re.IGNORECASE,
+)
+_IP_INTL_IMMIG = re.compile(r"\b(immigrat|visa|permit|status)\w*", re.IGNORECASE)
+_IP_INTL_WORK = re.compile(
+    r"\b(work(?!shop)|job|employment|co.?op|internship|career)\w*", re.IGNORECASE,
+)
+_IP_INTL_MOVE = re.compile(
+    r"\b(move|arriv|travel|flight|airport|accommod|housing|settle|land|new to canada|come to canada)\w*",
+    re.IGNORECASE,
+)
+_IP_INTL_FINANCE = re.compile(
+    r"\b(tuition|financ|pay|cost|money|expense|fee|budget)\w*", re.IGNORECASE,
+)
+_IP_WRITING_APPT = re.compile(
+    r"\b(appointment|book|meet|schedule|consult|drop[ -]?in|one[ -]?on[ -]?one|sign.?up)\w*",
+    re.IGNORECASE,
+)
+_IP_WRITING_RES = re.compile(
+    r"\b(resource|handout|guide|citation|apa|mla|chicago|tip|example|template|sample|format|worksheet)\w*",
+    re.IGNORECASE,
+)
+
+# (id, pattern, negative, facets[(label, url_fragment, when_or_None)]).
+# Facets are ordered most-important-first; aggregation stops after
+# _IP_MAX_FACET_PAGES page-groups are added.
+_IP_GRADUATE_PATTERN = re.compile(
+    r"\bmasters?('|s)?\b|\bmaster of\b|\bpostgraduate\b|\bpost-graduate\b|"
+    r"\bgraduate\b|\bgrad\b|\bph\.?d\b|\bdoctorate\b|\bdoctoral\b",
+    re.IGNORECASE,
+)
+_IP_GRADUATE_NEGATIVE = re.compile(
+    r"\bcourses?\b|\bclasses?\b|\bprerequisit\w*\b", re.IGNORECASE,
+)
+_IP_WELLNESS_PATTERN = re.compile(
+    r"\bstress(?:ed|ful|ing)?\b|\banxious?\b|\banxiety\b|\bdepress(?:ed|ion)?\b|"
+    r"\bsuicid\w*\b|\bmental health\b|\bcounsell\w*\b|\bcounsel(?!ing)\w*\b|"
+    r"\bwell[- ]?being\b|\bwellbeing\b|\bwellness\b|\btherap\w*\b|\bpsycholog\w*\b|"
+    r"\bpsychiatr\w*\b|\bcrisis\b|\bstruggl\w*\b|\boverwhelm\w*\b|\bemotional\b|\bself[- ]?care\b",
+    re.IGNORECASE,
+)
+_IP_INTERNATIONAL_PATTERN = re.compile(
+    r"\binternational students?\b|\bimmigration\b|\bstudy permit\b|\bvisa\b|"
+    r"\bnew to canada\b|\bcome to canada\b|\bmove to (?:canada|l(?:a)?urier)\b|"
+    r"\barriv\w* (?:in|to|at) (?:canada|l(?:a)?urier)\b",
+    re.IGNORECASE,
+)
+_IP_INTERNATIONAL_CONTEXT = re.compile(
+    r"\bsupport\b|\bhelp\b|\bimmigration\b|\bvisa\b|\bpermit\b|\bcounsell\w*\b|"
+    r"\binsurance\b|\bmove\b|\barriv\w*\b|\bwork(?!shop)\w*\b|\bjob\b|\bstudy\b|"
+    r"\bhousing\b|\baccommod\w*\b|\badvise?\w*\b|\bconnect\w*\b|\borient\w*\b|"
+    r"\btuition\b|\bfinanc\w*\b|\bpay\b|\bexpense\w*\b|\bnew to canada\b|"
+    r"\bcome to canada\b|\bregister\w*\b|\benroll\w*\b",
+    re.IGNORECASE,
+)
+_IP_WRITING_PATTERN = re.compile(
+    r"\bwriting (?:centre|center|support|help|services?|appointments?|programs?|"
+    r"workshops?|resources?|assist\w*)\b|"
+    r"\bessay (?:help|writing|support|assist\w*)\b|"
+    r"\bhelp (?:with|me with)? ?(?:my )?(?:essay|paper|assignment|writing|thesis)\b|"
+    r"\b(?:improve|better|polish) (?:my )?(?:writing|essay|paper)\b|\bproofread\w*\b|"
+    r"\b(?:citation|apa|mla|chicago|academic writing)\b.{0,30}?\b(?:help|guide|format|style)\b|"
+    r"\bthesis (?:writing|support)\b",
+    re.IGNORECASE,
+)
+
+_IP_INTENTS = [
+    {
+        "id": "graduate",
+        "pattern": _IP_GRADUATE_PATTERN,
+        "negative": _IP_GRADUATE_NEGATIVE,
+        "facets": [
+            # (label, canonical URL fragment, when-or-None)
+            ("Graduate Admissions & Requirements",
+             "graduate-and-postdoctoral-studies/admissions", None),
+            ("Graduate Funding & Awards",
+             "graduate-funding-and-awards/index", None),
+            ("Graduate Studies",
+             "graduate-and-postdoctoral-studies/index", None),
+            ("International Graduate Students",
+             "graduate-and-postdoctoral-studies/international-students",
+             _IP_INTERNATIONAL_MENTION),
+        ],
+    },
+    {
+        "id": "wellness",
+        "pattern": _IP_WELLNESS_PATTERN,
+        "facets": [
+            ("Mental Health Resources", "mental-health-resources", None),
+            ("Student Wellness Centre Services",
+             "student-wellness-centre/services", None),
+            ("Urgent & After-Hours Care", "urgent-care", _IP_WELLNESS_CRISIS),
+        ],
+    },
+    {
+        "id": "international",
+        "pattern": _IP_INTERNATIONAL_PATTERN,
+        "context": _IP_INTERNATIONAL_CONTEXT,
+        "facets": [
+            ("Immigration & Visas",
+             "international-student-support/immigration/index", _IP_INTL_IMMIG),
+            ("Working in Canada",
+             "international-student-support/working-in-canada", _IP_INTL_WORK),
+            ("Planning Your Move",
+             "international-student-support/planning-your-move", _IP_INTL_MOVE),
+            ("International Finances",
+             "international-student-support/assets/resources/"
+             "paying-tuition-and-managing-your-expenses", _IP_INTL_FINANCE),
+            ("International Student Support",
+             "international-student-support/index", None),
+        ],
+    },
+    {
+        "id": "writing",
+        "pattern": _IP_WRITING_PATTERN,
+        "facets": [
+            ("Writing Support Programs",
+             "writing/writing-support-programs", None),
+            ("Writing Appointments",
+             "student-success/appointments", _IP_WRITING_APPT),
+            ("Writing Resources & Handouts",
+             "student-success/resources", _IP_WRITING_RES),
+        ],
+    },
+]
+
+_IP_MAX_FACET_PAGES = 3
+_IP_MAX_CHUNKS_PER_FACET = 2
+_IP_MAX_FACET_CHARS = 9000
+_IP_FACET_TOP_K = 4
+
+
+def _plan_intent(question):
+    """Deterministic intent planner. Returns the first intent whose
+    trigger fires (and whose negative guard does not), or None."""
+    q = question.lower()
+    for intent in _IP_INTENTS:
+        if not intent["pattern"].search(q):
+            continue
+        if intent.get("negative") and intent["negative"].search(q):
+            continue
+        if intent.get("context") and not intent["context"].search(q):
+            continue
+        return intent
+    return None
+
+
+def _aggregate_intent_facets(intent, question, winner_url, included_urls,
+                             included_token_sets):
+    """Fetch the intent's canonical facet pages as labeled secondary
+    sources. Pure retrieval + dedupe - no LLM. Returns a list of groups
+    {"label", "url", "title", "chunks"}; empty when no facet qualifies."""
+    q_lower = question.lower()
+    groups = []
+    facet_chars = 0
+    included_urls = set(included_urls)
+
+    for label, url_fragment, when in intent["facets"]:
+
+        if when is not None and not when.search(q_lower):
+            continue
+
+        if len(groups) >= _IP_MAX_FACET_PAGES:
+            break
+
+        candidates = hybrid_rerank.bm25_search_in_section(
+            collection, question, url_fragment, top_k=_IP_FACET_TOP_K,
+        )
+
+        page_url = next(
+            (c["url"] for c in candidates
+             if url_fragment in (c.get("url") or "")),
+            None,
+        )
+
+        # The canonical page is absent from the corpus (refresh/rename)
+        # or already cited (winner / Sprint C secondary) - skip.
+        if page_url is None or page_url in included_urls:
+            continue
+
+        page_chunks = [
+            c["document"] for c in candidates
+            if (c.get("url") or "") == page_url
+        ][:_IP_MAX_CHUNKS_PER_FACET]
+
+        if not page_chunks:
+            continue
+
+        kept = []
+
+        for document in page_chunks:
+
+            document = _strip_known_boilerplate_text(document)
+
+            if _multidoc_near_duplicate(document, included_token_sets):
+                continue
+
+            if facet_chars + len(document) > _IP_MAX_FACET_CHARS:
+                continue
+
+            kept.append(document)
+            facet_chars += len(document)
+            included_token_sets.append(_multidoc_token_set(document))
+
+        if not kept:
+            continue
+
+        included_urls.add(page_url)
+
+        groups.append({
+            "label": label,
+            "url": page_url,
+            "title": candidates[0].get("title"),
+            "chunks": kept,
+        })
+
+    return groups
+
+
 def hybrid_search(question, memory=None):
 
     result = structured_search(question, memory)
@@ -5907,9 +6168,47 @@ def hybrid_search(question, memory=None):
         secondary_chars += len(document)
         included_token_sets.append(_multidoc_token_set(document))
 
-    if not secondary_groups:
+    # Labeled multi-source context: the primary page first (content
+    # unchanged, wrapped in a Source header), then each complementary
+    # page (Sprint C), then each intent facet page (Sprint E). Labels
+    # carry the page TITLES / facet labels only - URLs are deliberately
+    # not injected into the prompt (the citation rendered below the
+    # answer already shows them), so the LLM never echoes raw links.
+    sections = [f"Source 1: {winner.get('title') or 'Primary page'}"]
+    sections.extend(primary_documents)
 
-        # No qualifying complementary source - EXACTLY the pre-Sprint-C
+    for index, group in enumerate(secondary_groups, start=2):
+        sections.append(f"Source {index}: {group['title'] or 'Related page'}")
+        sections.extend(group["chunks"])
+
+    source_urls = [winner_url] + [group["url"] for group in secondary_groups]
+
+    # Sprint E - Intent Planner & Knowledge Aggregation. Appends
+    # intent-specific canonical facet pages to whichever context form is
+    # being built. Every facet is grounded WLU content pulled through
+    # the existing BM25 index, labeled by its facet so the answer
+    # generator can organize a multi-angle answer. When no intent fires
+    # or every facet dedupes, `facet_groups` stays empty and the
+    # context/source above are returned byte-identical to Sprint C.
+    facet_groups = []
+    intent = _plan_intent(question)
+
+    if intent is not None:
+        facet_groups = _aggregate_intent_facets(
+            intent, question, winner_url,
+            source_urls, included_token_sets,
+        )
+
+    for index, group in enumerate(
+        facet_groups, start=1 + len(secondary_groups) + 1,
+    ):
+        sections.append(f"Source {index}: {group['label']}")
+        sections.extend(group["chunks"])
+        source_urls.append(group["url"])
+
+    if not secondary_groups and not facet_groups:
+
+        # No complementary source at all - EXACTLY the pre-Sprint-C
         # context (byte-identical) and a single-string source, so every
         # question with no useful secondary page behaves as before.
         context = "\n\n".join(primary_documents)
@@ -5917,20 +6216,8 @@ def hybrid_search(question, memory=None):
 
     else:
 
-        # Labeled multi-source context: the primary page first (content
-        # unchanged, wrapped in a Source header), then each complementary
-        # page. Labels carry the page TITLES only - URLs are deliberately
-        # not injected into the prompt (the citation rendered below the
-        # answer already shows them), so the LLM never echoes raw links.
-        sections = [f"Source 1: {winner.get('title') or 'Primary page'}"]
-        sections.extend(primary_documents)
-
-        for index, group in enumerate(secondary_groups, start=2):
-            sections.append(f"Source {index}: {group['title'] or 'Related page'}")
-            sections.extend(group["chunks"])
-
         context = "\n\n".join(sections)
-        source = [winner_url] + [group["url"] for group in secondary_groups]
+        source = source_urls
 
     hybrid_rerank.record_debug_trace({
         "question": question,
@@ -5947,6 +6234,11 @@ def hybrid_search(question, memory=None):
         "secondary_sources": [
             {"url": g["url"], "title": g["title"], "n_chunks": len(g["chunks"])}
             for g in secondary_groups
+        ],
+        "intent_planner": intent["id"] if intent is not None else None,
+        "intent_facet_sources": [
+            {"label": g["label"], "url": g["url"], "n_chunks": len(g["chunks"])}
+            for g in facet_groups
         ],
     })
 
