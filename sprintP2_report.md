@@ -1,7 +1,7 @@
 # Sprint P2 — UI & UX Polish
 
 **Status:** Implementation + verification complete. All gates pass — committed automatically.
-**Commit:** `(pending)`
+**Commit:** `dc11222`
 
 ---
 
