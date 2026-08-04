@@ -5398,6 +5398,174 @@ def _multidoc_near_duplicate(document, included_token_sets):
     return False
 
 
+# ------------------------------------------------------------------
+# Sprint D - deterministic query rewrite for the FREE-TEXT retrieval
+# path only (BM25 + vector). Applied INSIDE hybrid_search() AFTER
+# structured_search() has already missed and after the referentless /
+# cold-follow-up gates have been evaluated on the RAW question, so:
+#   - structured retrieval, the domain gate, contextual-reference
+#     resolution, and answer generation all keep the raw question;
+#   - only the lexical search the user's words feed sees the expansion.
+#
+# Every rule is a high-precision trigger (a specific acronym token or a
+# specific casual-intent phrase); the expansion APPENDS canonical WLU
+# vocabulary the corpus actually uses, keeping the user's own words
+# first so BM25/embedding still weigh the original intent highest. A
+# query that matches no rule is returned byte-for-byte identical, so
+# the 202-item benchmark and regression suite are untouched for every
+# question not explicitly targeted (verified: exactly three benchmark
+# items fire any rule - FAQ_002 "MSW" (expansion "Master of Social
+# Work" is exactly what MSW means), and STUDENTSVC_001/011 (support-
+# context international questions whose "support services" expansion
+# reinforces the support-and-wellness page they already require). No
+# decline-expected item fires any rule.
+#
+# No LLM, no external API, no invented facts - expansions are static
+# ground-truth terms. Guards on every rule skip the append when the
+# expansion's core phrase is already present, so an already well-formed
+# query is never duplicated.
+# ------------------------------------------------------------------
+
+# (acronym token, canonical phrase, extra terms) - token is matched as a
+# standalone word-boundary token, case-insensitively, so course codes
+# like "CS100" (no boundary) are never touched.
+# Every expansion is a tuple of phrases; _rewrite_query's _append()
+# helper adds only phrases not already present in the accumulated query,
+# so rules never duplicate vocabulary the query (or an earlier rule) has
+# already supplied (e.g. "Who does research in AI" must not repeat
+# "artificial intelligence" after the acronym rule added it).
+_QR_ACRONYMS = [
+    ("ai", "artificial intelligence", "machine learning"),
+    ("ml", "machine learning", None),
+    ("nlp", "natural language processing", None),
+    ("cs", "computer science", None),
+    ("msw", "master of social work", None),
+]
+
+_QR_STRESS_PATTERN = re.compile(
+    r"\b(stress|stressed|stressing|anxious|anxiety|overwhelmed|overwhelming|"
+    r"depressed|depression|suicidal|suicide)\b"
+    r"|feeling\s+(down|low|bad|blue)"
+    r"|not\s+(ok|okay|alright|fine)",
+    re.IGNORECASE,
+)
+_QR_STRESS_EXPANSION = (
+    "mental health", "wellness", "counselling", "student support services",
+)
+
+# Casual graduate-school intent ("I want a Masters", "looking to get a
+# graduate degree"), NOT "Master of Finance"-style proper names (those
+# route through structured program search and match neither alternative:
+# no subject pronoun before the degree word, no "master <degree>"
+# adjacency).
+_QR_GRADUATE_PATTERN = re.compile(
+    r"\b(i|i'?m|we|we'?re|looking\s+to|want(ing)?\s+to|wanna|gonna|"
+    r"going\s+to|how\s+(do|can|should)\s+i|thinking\s+about)\b"
+    r"[^.!?]{0,45}?\b(masters?|graduate|grad)\b"
+    r"|\b(masters?|graduate|grad)\s+(degree|program|studies|school|admissions?)\b",
+    re.IGNORECASE,
+)
+_QR_GRADUATE_EXPANSION = (
+    "graduate programs", "master programs", "admissions", "graduate studies",
+)
+
+_QR_SUPERVISOR_PATTERN = re.compile(
+    r"\bfind\s+(?:a\s+|my\s+|the\s+|a\s+research\s+)?supervisor\b"
+    r"|\bresearch\s+supervisor\b"
+    r"|\bsupervisor\s+(?:for|in)\b",
+    re.IGNORECASE,
+)
+_QR_SUPERVISOR_EXPANSION = ("faculty research", "graduate studies")
+
+# AI-term + faculty/research-term co-occurrence in EITHER order, without
+# crossing a sentence boundary. Both alternatives use the same
+# faculty/research alternation (with plural stems), so "research in AI",
+# "AI professors" and "professors of machine learning" all fire.
+_QR_AI_FACULTY_PATTERN = re.compile(
+    r"\b(ai|artificial intelligence|machine learning)\b"
+    r"[^.!?]{0,25}?"
+    r"\b(professors?|facult(?:y|ies)|researchers?|research(?:es|ing)?|supervisors?)\b"
+    r"|\b(professors?|facult(?:y|ies)|researchers?|research(?:es|ing)?|supervisors?)\b"
+    r"[^.!?]{0,25}?"
+    r"\b(ai|artificial intelligence|machine learning)\b",
+    re.IGNORECASE,
+)
+_QR_AI_FACULTY_EXPANSION = (
+    "faculty research", "computer science",
+)
+
+# International students in a SUPPORT/HELP context only. A bare
+# "tuition / fees / how to apply for international students" query is
+# precise as-is and must not pick up "support services" noise - the
+# support-and-wellness vocabulary only helps when the user is actually
+# asking about support (benchmark STUDENTSVC_001/011, MG_INT1).
+_QR_INTERNATIONAL_PATTERN = re.compile(
+    r"\binternational\s+students?\b", re.IGNORECASE
+)
+_QR_INTERNATIONAL_SUPPORT_CONTEXT = re.compile(
+    r"\b(support|help|service|services|assistance|resource|resources|"
+    r"immigration|visa|counselling|wellness|mental\s+health)\b",
+    re.IGNORECASE,
+)
+_QR_INTERNATIONAL_EXPANSION = ("support services",)
+
+
+def _rewrite_query(question):
+    """Return the expanded retrieval query, or the original question
+    byte-for-byte when no rule fires. Pure function - callers keep the
+    raw question for every non-retrieval purpose."""
+    original = question
+    parts = [question]
+    q_lower = " ".join(parts).lower()
+
+    def _append(phrases):
+        # Add only phrases not already present, keeping the user's own
+        # words first so the original intent always dominates BM25/vector
+        # weighting.
+        nonlocal q_lower
+        for phrase in phrases:
+            if phrase.lower() not in q_lower:
+                parts.append(phrase)
+                q_lower = " ".join(parts).lower()
+
+    # 1. Acronym expansion (standalone word-boundary token).
+    for token, canonical, extra in _QR_ACRONYMS:
+        if re.search(rf"\b{re.escape(token)}\b", q_lower):
+            _append([p for p in (canonical, extra) if p])
+
+    # 2. Stress / mental-health intent.
+    if _QR_STRESS_PATTERN.search(q_lower):
+        _append(_QR_STRESS_EXPANSION)
+
+    # 3. Graduate intent (skip when the query already names a graduate
+    #    program, i.e. is already well-formed).
+    if _QR_GRADUATE_PATTERN.search(q_lower) and not re.search(
+        r"\bgraduate\s+program", q_lower
+    ):
+        _append(_QR_GRADUATE_EXPANSION)
+
+    # 4. Research supervisor.
+    if _QR_SUPERVISOR_PATTERN.search(q_lower):
+        _append(_QR_SUPERVISOR_EXPANSION)
+
+    # 5. AI faculty / research (skip when already explicit).
+    if _QR_AI_FACULTY_PATTERN.search(q_lower) and not (
+        "computer science" in q_lower and "faculty" in q_lower
+    ):
+        _append(_QR_AI_FACULTY_EXPANSION)
+
+    # 6. International students in a support/help context only.
+    if (
+        _QR_INTERNATIONAL_PATTERN.search(q_lower)
+        and _QR_INTERNATIONAL_SUPPORT_CONTEXT.search(q_lower)
+    ):
+        _append(_QR_INTERNATIONAL_EXPANSION)
+
+    rewritten = " ".join(parts)
+
+    return rewritten if rewritten != original else original
+
+
 def hybrid_search(question, memory=None):
 
     result = structured_search(question, memory)
@@ -5447,9 +5615,23 @@ def hybrid_search(question, memory=None):
 
     # VECTOR SEARCH
 
-    results = search_vector(
-        question
-    )
+    # Sprint D - deterministic query rewrite for this retrieval path only
+    # (see _rewrite_query's design comment). `retrieval_question` is a
+    # pure function of the RAW question; when no rule fires it is
+    # byte-identical and the whole Sprint-D layer is a no-op. Every
+    # consumer outside this function (structured search, domain gate,
+    # canonical-section detection, answer prompt, citations) keeps the
+    # raw `question` - only the lexical search the user's words feed is
+    # allowed to see the expansion.
+    retrieval_question = _rewrite_query(question)
+    query_rewritten = retrieval_question != question
+
+    # Stage 1 - the RAW question is always embedded first and its own
+    # nearest neighbour gates. The distance threshold was calibrated
+    # against raw-query distances (see the calibration note below), so an
+    # unrewritten query gates EXACTLY as it did pre-Sprint-D; the rewrite
+    # can later rebuild the candidate POOL, never the gate's yes/no basis.
+    raw_results = search_vector(question)
 
     # Restores the ORIGINAL calibration assumption the 1.19/1.23 data
     # points (see _VECTOR_SEARCH_DISTANCE_THRESHOLD's own comment) were
@@ -5481,7 +5663,7 @@ def hybrid_search(question, memory=None):
     # completely unaffected by this - they still decide WHICH page
     # answers the question once the gate has approved it; this only
     # restores the gate's own yes/no input to its original basis.
-    top_distance = min(results["distances"][0])
+    raw_top_distance = min(raw_results["distances"][0])
 
     # Exempt recognized follow-up phrases ("tell me more", "explain",
     # ...): these carry no semantic content of their own to embed - the
@@ -5490,19 +5672,62 @@ def hybrid_search(question, memory=None):
     # relying on chat history, not fresh retrieval, for its answer - the
     # same reason app.py's off-topic gate exempts these) as a low-
     # confidence "not found" case.
-    if (
-        top_distance > _VECTOR_SEARCH_DISTANCE_THRESHOLD
-        and normalize_followup_text(question) not in FOLLOWUP_PHRASES
-    ):
+    is_followup = normalize_followup_text(question) in FOLLOWUP_PHRASES
 
-        hybrid_rerank.record_debug_trace({
-            "question": question,
-            "structured_retrieval_used": False,
-            "gate_passed": False,
-            "gate_top_distance": top_distance,
-        })
+    if raw_top_distance > _VECTOR_SEARCH_DISTANCE_THRESHOLD and not is_followup:
 
-        return _NO_CONFIDENT_MATCH_MESSAGE, None, "not_found"
+        # Stage 2 - rescue attempt. The RAW query declined the gate but a
+        # rewrite rule fired: try the expanded query's own nearest
+        # neighbour and accept only if THAT is in-threshold. This is the
+        # "expand only when beneficial" guarantee - a rewrite can never
+        # turn an already-answerable query into not_found (the raw query
+        # was going to be declined anyway), and it can only rescue a
+        # query the raw form would have declined.
+        if query_rewritten:
+            rescue_results = search_vector(retrieval_question)
+            rescue_top_distance = min(rescue_results["distances"][0])
+
+            if rescue_top_distance <= _VECTOR_SEARCH_DISTANCE_THRESHOLD:
+                results = rescue_results
+                top_distance = rescue_top_distance
+                gate_rescued = True
+            else:
+                results = raw_results
+                top_distance = raw_top_distance
+                gate_rescued = False
+        else:
+            results = raw_results
+            top_distance = raw_top_distance
+            gate_rescued = False
+
+        if not gate_rescued:
+
+            hybrid_rerank.record_debug_trace({
+                "question": question,
+                "structured_retrieval_used": False,
+                "gate_passed": False,
+                "gate_top_distance": top_distance,
+                "query_rewritten": query_rewritten,
+                "rewritten_query": retrieval_question if query_rewritten else question,
+            })
+
+            return _NO_CONFIDENT_MATCH_MESSAGE, None, "not_found"
+
+        # Accepted via rescue - fall through with the rewritten pool.
+
+    else:
+
+        # Raw query passed (or is an exempt follow-up continuation). The
+        # gate keeps the RAW query as its basis; only when a rewrite
+        # actually fired is the candidate pool rebuilt from the expanded
+        # query, so the better terms drive BM25/vector selection too.
+        top_distance = raw_top_distance
+        gate_rescued = False
+
+        if query_rewritten:
+            results = search_vector(retrieval_question)
+        else:
+            results = raw_results
 
     # Gate passed - true hybrid retrieval now picks the best page: dense
     # + BM25 candidates (chunk-level, not the gate's per-URL-deduped
@@ -5513,7 +5738,7 @@ def hybrid_search(question, memory=None):
     # it to pick up refreshed content.
     dense_candidates = hybrid_rerank.dense_candidates_from_results(results)
 
-    bm25_candidates = hybrid_rerank.bm25_search(collection, question)
+    bm25_candidates = hybrid_rerank.bm25_search(collection, retrieval_question)
 
     fused = hybrid_rerank.reciprocal_rank_fusion(dense_candidates, bm25_candidates)
 
@@ -5712,6 +5937,8 @@ def hybrid_search(question, memory=None):
         "structured_retrieval_used": False,
         "gate_passed": True,
         "gate_top_distance": top_distance,
+        "query_rewritten": query_rewritten,
+        "rewritten_query": retrieval_question if query_rewritten else question,
         "dense_candidates": dense_candidates,
         "bm25_candidates": bm25_candidates,
         "fused_ranking": fused,
