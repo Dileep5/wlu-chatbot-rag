@@ -5346,6 +5346,58 @@ def _is_referentless_query(question):
     return len(content_words) <= _REFERENTLESS_CONTENT_WORD_LIMIT
 
 
+# ------------------------------------------------------------------
+# Sprint C - multi-document context construction (retrieval
+# orchestration only). hybrid_search() below still selects the exact
+# same winning page and cites it as the primary source; this block only
+# changes what CONTEXT is handed to the answer generator. The winning
+# page's own chunks are kept verbatim (ranked by fused score, exactly
+# as before Sprint C), then a small, bounded set of COMPLEMENTARY
+# chunks from the best OTHER pages in the same relevance-ranked pool is
+# appended - after near-duplicate suppression - so the final context
+# contains genuinely different information instead of a single page's
+# slice, and never repeated chunks.
+#
+# Ranking, winner selection, the distance gate, structured search,
+# BM25, vector search, and Chroma are untouched. Citations gain the
+# secondary sources because citation.build_citation() already accepts
+# an iterable of URLs - the same mechanism structured_search()'s
+# multi-instructor answer uses (see _format_faculty_list_context near
+# line 1652) - and the renderer + benchmark check iterate
+# citation["sources"], so no code outside retriever.py changes.
+# ------------------------------------------------------------------
+
+_MULTIDOC_MAX_SECONDARY_PAGES = 2
+_MULTIDOC_MAX_CHUNKS_PER_SECONDARY = 3
+_MULTIDOC_MAX_SECONDARY_CHARS = 5000
+_MULTIDOC_MIN_SECONDARY_SCORE = 0.5
+_MULTIDOC_DUPE_TOKEN_OVERLAP = 0.85
+
+
+def _multidoc_token_set(text):
+    return set(re.findall(r"[a-z0-9]+", (text or "").lower()))
+
+
+def _multidoc_near_duplicate(document, included_token_sets):
+    """True when most of `document`'s own tokens already appear inside a
+    single already-included chunk (the primary page or a previously
+    added secondary chunk) - i.e. the chunk would add little or no NEW
+    information and should be dropped. Measures overlap against the
+    candidate's OWN token count (not the included chunk's), so a short
+    chunk that is a strict subset of a longer included chunk is dropped,
+    while a long chunk merely touching a short one is kept."""
+    tokens = _multidoc_token_set(document)
+
+    if not tokens:
+        return True
+
+    for included in included_token_sets:
+        if len(tokens & included) / len(tokens) >= _MULTIDOC_DUPE_TOKEN_OVERLAP:
+            return True
+
+    return False
+
+
 def hybrid_search(question, memory=None):
 
     result = structured_search(question, memory)
@@ -5547,11 +5599,14 @@ def hybrid_search(question, memory=None):
 
     winner_url = winner["url"]
 
-    # Context is built only from the winning page's own chunk(s) within
-    # the fused candidate pool - not a mix of several different
-    # candidates' pages - so the single cited source below is genuinely
-    # what grounds the whole answer, never a page whose content never
-    # made it into context.
+    # Sprint C - multi-document context construction. The winning page's
+    # own chunk(s) in the fused pool (ranked by fused score, the exact
+    # pre-Sprint-C content) remain the PRIMARY source of the context and
+    # of the citation. Then a bounded number of COMPLEMENTARY chunks
+    # from the best OTHER pages in the reranked pool are appended, each
+    # surviving a near-duplicate check against everything already
+    # included - so the context reads as one synthesized multi-source
+    # answer rather than a single page's slice or repeated chunks.
     seen_chunk_ids = set()
     same_page_documents = []
 
@@ -5563,11 +5618,94 @@ def hybrid_search(question, memory=None):
         seen_chunk_ids.add(candidate["id"])
         same_page_documents.append(candidate["document"])
 
-    context = "\n\n".join(
+    primary_documents = [
         _strip_known_boilerplate_text(document) for document in same_page_documents
-    )
+    ]
 
-    source = winner_url
+    # Cross-page near-duplicate suppression pool, seeded with the primary
+    # page's content so a secondary chunk that merely restates a primary
+    # chunk is dropped (e.g. the same "golden rules" published on several
+    # academic-integrity resource pages).
+    included_token_sets = [
+        _multidoc_token_set(document) for document in primary_documents
+    ]
+
+    secondary_groups = []
+    secondary_chars = 0
+
+    for candidate in reranked[1:]:
+
+        if candidate["url"] == winner_url:
+            continue
+
+        # Absolute relevance floor: the cross-encoder separates genuinely
+        # relevant pages (positive scores, typically > 0.5) from weakly
+        # or negatively scored noise that the winner's own page outranks.
+        # Confirmed live: for a query whose whole pool scored negatively
+        # (e.g. a title-word coincidence winner), NO secondary page is
+        # added and the context falls back to the single-source form.
+        if candidate.get("cross_encoder_score", -1.0) < _MULTIDOC_MIN_SECONDARY_SCORE:
+            continue
+
+        group = next(
+            (g for g in secondary_groups if g["url"] == candidate["url"]),
+            None,
+        )
+
+        if (
+            group is not None
+            and len(group["chunks"]) >= _MULTIDOC_MAX_CHUNKS_PER_SECONDARY
+        ):
+            continue
+
+        document = _strip_known_boilerplate_text(candidate["document"])
+
+        if _multidoc_near_duplicate(document, included_token_sets):
+            continue
+
+        if secondary_chars + len(document) > _MULTIDOC_MAX_SECONDARY_CHARS:
+            continue
+
+        if group is None:
+
+            if len(secondary_groups) >= _MULTIDOC_MAX_SECONDARY_PAGES:
+                continue
+
+            group = {
+                "url": candidate["url"],
+                "title": candidate.get("title"),
+                "chunks": [],
+            }
+            secondary_groups.append(group)
+
+        group["chunks"].append(document)
+        secondary_chars += len(document)
+        included_token_sets.append(_multidoc_token_set(document))
+
+    if not secondary_groups:
+
+        # No qualifying complementary source - EXACTLY the pre-Sprint-C
+        # context (byte-identical) and a single-string source, so every
+        # question with no useful secondary page behaves as before.
+        context = "\n\n".join(primary_documents)
+        source = winner_url
+
+    else:
+
+        # Labeled multi-source context: the primary page first (content
+        # unchanged, wrapped in a Source header), then each complementary
+        # page. Labels carry the page TITLES only - URLs are deliberately
+        # not injected into the prompt (the citation rendered below the
+        # answer already shows them), so the LLM never echoes raw links.
+        sections = [f"Source 1: {winner.get('title') or 'Primary page'}"]
+        sections.extend(primary_documents)
+
+        for index, group in enumerate(secondary_groups, start=2):
+            sections.append(f"Source {index}: {group['title'] or 'Related page'}")
+            sections.extend(group["chunks"])
+
+        context = "\n\n".join(sections)
+        source = [winner_url] + [group["url"] for group in secondary_groups]
 
     hybrid_rerank.record_debug_trace({
         "question": question,
@@ -5579,6 +5717,10 @@ def hybrid_search(question, memory=None):
         "fused_ranking": fused,
         "cross_encoder_scores": reranked,
         "final_selected_chunk": winner,
+        "secondary_sources": [
+            {"url": g["url"], "title": g["title"], "n_chunks": len(g["chunks"])}
+            for g in secondary_groups
+        ],
     })
 
     return context, source, "vector"
