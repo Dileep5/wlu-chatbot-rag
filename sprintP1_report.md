@@ -1,7 +1,7 @@
 # Sprint P1 — Fix Real User Experience Bugs
 
 **Status:** Implementation + verification complete. All gates pass — committed automatically.
-**Commit:** `12054dc`
+**Commit:** `2f103ca`
 
 ---
 
