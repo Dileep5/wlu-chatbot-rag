@@ -10,6 +10,7 @@ from retriever import (
     hybrid_search,
     structured_search,
     resolve_contextual_reference,
+    intent_id,
     FOLLOWUP_PHRASES,
     normalize_followup_text,
     create_memory,
@@ -314,6 +315,9 @@ Conversational follow-ups (occasional, situational):
 
 _VECTOR_TOPIC_PATTERNS = [
     # Ordered most-specific first - first match wins.
+    ("convocation", re.compile(
+        r"convocation|graduation cere(?:mony|monies)",
+        re.IGNORECASE)),
     ("deadline", re.compile(
         r"deadline|last day|due date|drop|withdraw|refund|add/drop|"
         r"exam schedule|exam date|important dates|academic calendar|"
@@ -423,6 +427,23 @@ VECTOR_TOPIC_STRUCTURE = {
         "- Close with a one-line **Summary** of what the dates mean "
         "(e.g. what happens after a drop or refund cutoff)."
     ),
+    "convocation": (
+        "Layout for this convocation question:\n"
+        "- Open with **Overview** - one sentence naming the ceremony "
+        "date and time EXACTLY as written in the retrieved text (e.g. "
+        "'October 20 at 2:00 p.m.').\n"
+        "- **Key Details** - time, location, faculties/programs "
+        "included - only fields actually present in the retrieved text.\n"
+        "- **Verbatim rule**: copy every date, time, and campus "
+        "verbatim from the retrieved text. Never shift, round, or "
+        "estimate a date - if the text says 'October 20', write "
+        "'October 20', never 'October 21'. A date belongs to the campus "
+        "and ceremony row it appears beside (Waterloo vs Brantford "
+        "ceremonies have different dates); do not move a date to a "
+        "different ceremony.\n"
+        "- **Related** - tickets, livestream, guest information, only "
+        "if present."
+    ),
     "service": (
         "Layout for this campus-service question:\n"
         "- Open with **Overview** - one sentence on what the service is "
@@ -448,6 +469,10 @@ VECTOR_TOPIC_STRUCTURE = {
 # Fixed per detected topic, never LLM-generated - the same
 # capability-safety reasoning as FOLLOWUP_SUGGESTIONS above.
 VECTOR_TOPIC_SUGGESTIONS = {
+    "convocation": [
+        "When is Spring 2026 convocation?",
+        "Where can I find convocation ticket information?",
+    ],
     "deadline": [
         "What are the tuition payment deadlines?",
         "When can I add or drop a course?",
@@ -502,9 +527,22 @@ def generate_answer(
 
     system_prompt = VECTOR_SYSTEM_PROMPT
 
-    structure_hint = VECTOR_TOPIC_STRUCTURE.get(
-        _detect_vector_topic(query)
-    )
+    topic = _detect_vector_topic(query)
+
+    if topic == "general" and re.search(
+        r"\bconvocation\b", context, re.IGNORECASE
+    ):
+        # A bare follow-up ("For Brantford?") resolved by the campus
+        # qualifier carries no convocation keyword of its own - the
+        # query is just a campus name - yet the CONTEXT it was answered
+        # from is the convocation ceremony table. Apply the convocation
+        # layout + verbatim-date rule anyway, so a date-critical
+        # convocation answer never loses its "copy dates exactly" guard
+        # just because the follow-up phrasing omitted the word
+        # "convocation".
+        topic = "convocation"
+
+    structure_hint = VECTOR_TOPIC_STRUCTURE.get(topic)
 
     if structure_hint:
 
@@ -833,31 +871,60 @@ def generate_grounded_summary(query, context, response_type):
 
         client = OpenAI()
 
+        # Sprint 2A (BUG5): "Who is Patricia Goff?" returned only the
+        # name/title lead and omitted the profile's rich fields (research
+        # interests, teaching background, office, email) because the card
+        # showing them is deliberately suppressed on first ask (see
+        # _CARD_ON_REQUEST_TYPES). For faculty_profile the summary prompt
+        # is enriched so those fields surface in the prose itself - but
+        # NEVER as the context's label-colon lines ("Name: ...",
+        # "Email: ..."), which would break the card-on-request contract
+        # the regression suite checks ("Who is Shohini Ghose?" turn 1
+        # must not render both "Name:" and "Email:"). Flowing-sentence
+        # only, grounded in the same deterministic context.
+        faculty_summary = response_type == "faculty_profile"
+
+        system_content = (
+            (
+                "Using ONLY the facts listed below, answer the user's "
+                "question in 2-4 sentences the way a genuinely curious, "
+                "warm person would. This is a faculty member - cover "
+                "their title, faculty, department, research interests, "
+                "and any teaching/background the facts list, and mention "
+                "their office and email conversationally (e.g. 'their "
+                "office is ...', 'you can reach them at ...') when "
+                "present. Write everything as flowing prose - never "
+                "reproduce the facts' label-colon lines (Name:, Title:, "
+                "Email:, Office:) or any other field-name-then-colon "
+                "pattern. Do not add, infer, or estimate any name, "
+                "number, date, or requirement that isn't explicitly "
+                "present below; skip any field the facts omit."
+            )
+            if faculty_summary
+            else (
+                "Using ONLY the facts listed below, answer the user's "
+                "question in 1-2 sentences the way a genuinely curious, "
+                "warm person would - conversational, with real "
+                "personality, never a dry textbook restatement. Do not "
+                "add, infer, or estimate any name, number, date, or "
+                "requirement that isn't explicitly present below. If the "
+                "listed facts don't fully answer the question, say what "
+                "they do cover and note what's missing - never fill the "
+                "gap from outside knowledge."
+            )
+        )
+
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Using ONLY the facts listed below, answer the "
-                        "user's question in 1-2 sentences the way a "
-                        "genuinely curious, warm person would - "
-                        "conversational, with real personality, never a "
-                        "dry textbook restatement. Do not add, infer, or "
-                        "estimate any name, number, date, or requirement "
-                        "that isn't explicitly present below. If the "
-                        "listed facts don't fully answer the question, "
-                        "say what they do cover and note what's missing "
-                        "- never fill the gap from outside knowledge."
-                    )
-                },
+                {"role": "system", "content": system_content},
                 {
                     "role": "user",
                     "content": f"Facts:\n\n{context}\n\nQuestion:\n\n{query}"
                 }
             ],
             temperature=0.25,
-            max_tokens=150
+            max_tokens=220 if faculty_summary else 150
         )
 
         return response.choices[0].message.content.strip()
@@ -1167,6 +1234,37 @@ _BROAD_DETAIL_REQUEST_PATTERN = re.compile(
 # Still available as a fallback for anyone who types "tell me more"
 # unprompted, with no button context at all - only removed as the
 # PRIMARY path once a button already covers the same action.
+
+
+# Wellness rescue gate (Sprint 2A, BUG1). The off-topic branch rescues
+# wellness-support statements that the keyword/LLM domain check misses
+# ("I'm stressed.") by rerouting them to normal hybrid retrieval - but
+# the intent planner's wellness pattern is deliberately broad and also
+# fires on TOPICAL wellness-adjacent words ("This is just common sense
+# psychology." matches \bpsycholog\w*\b), and those must keep declining
+# as off-topic rather than being rerouted into retrieval. This narrower
+# pattern is the discriminator between the two: it only fires for a
+# first-person self-state statement, an explicit help-seeking request,
+# or a close-other concern - the shapes a genuine wellness need takes.
+# The intent-planner match alone stays the primary trigger (a static,
+# corpus-grounded signal); this gate just stops the rescue from
+# hijacking topical mentions that merely CONTAIN a wellness token.
+# Note this only ever runs on queries is_wlu_related() already ruled
+# out-of-domain, so a phrase like "I'm having a hard time finding the
+# Writing Centre" - which would match the first-person branch here - is
+# safe: it is WLU-related and never reaches this branch.
+_WELLNESS_RESCUE_PATTERN = re.compile(
+    r"(?:\bi(?:'m| am| feel| have been|'ve been| was|'m feeling| am feeling)?\b"
+    r".{0,30}?\b(?:stressed?|anxious?|anxiety|depressed?|depression|overwhelmed?|"
+    r"struggling?|worried?|down|low|not ok|not okay|suicid\w*|crisis|stuck|"
+    r"hard time|rough time|tough time|difficult time|not doing well|in a bad place)\b)|"
+    r"\b(?:need|want|looking for|get|find|seek|require)\b"
+    r".{0,25}?\b(?:help|support|counsell\w*|therap\w*|someone to talk|a therapist|"
+    r"mental health|wellness|someone)\b|"
+    r"\bmy\b.{0,30}?\b(?:stressed?|anxious?|depressed?|overwhelmed?|struggling?|"
+    r"worried?|suicid\w*|crisis|mental health|hard time|not doing well)\b",
+    re.IGNORECASE,
+)
 
 
 def _finalize_response(query, answer, source, response_type, memory):
@@ -2578,14 +2676,51 @@ if query:
             and not is_wlu_related(query)
         ):
 
-            if is_factual_offtopic(query):
+            # Sprint 2A (BUG1) - wellness rescue. The off-topic gate runs
+            # before hybrid_search, so a wellness-support statement the
+            # keyword/LLM domain check doesn't recognize ("I'm stressed.",
+            # "I'm feeling anxious.") would get a social decline with no
+            # WLU resources at all. When the deterministic intent planner
+            # fires the wellness intent, route to the normal hybrid
+            # retrieval path instead - the same grounded, cited wellness
+            # answer (Student Wellness Centre, counselling, mental-health
+            # resources, urgent care) as any other wellness query, never
+            # an apology. Two guards keep this from hijacking queries
+            # that only CONTAIN a wellness token without being a
+            # support need: (1) the intent-planner match must ALSO clear
+            # _WELLNESS_RESCUE_PATTERN, the first-person/help-seeking
+            # discriminator that excludes topical mentions like "This is
+            # just common sense psychology." (the pre-existing wellness
+            # pattern matches \bpsycholog\w*\b, and rerouting that into
+            # retrieval broke the "Common-sense psychology is not the
+            # Psychology department" false-positive regression); and
+            # (2) even a genuinely rescued statement that retrieval
+            # finds nothing for degrades to the ordinary social response
+            # rather than rendering a bare not-found card.
+            if (
+                intent_id(query) == "wellness"
+                and _WELLNESS_RESCUE_PATTERN.search(query)
+            ):
+
+                context, source, response_type = hybrid_search(
+                    query, st.session_state.memory
+                )
+
+                if response_type == "not_found":
+                    answer = generate_offtopic_social_response(query)
+                    response_type = "off_topic_social"
+                    source = None
+                else:
+                    answer = generate_answer(query, context, response_type)
+
+            elif is_factual_offtopic(query):
                 answer = generate_offtopic_decline(query)
                 response_type = "off_topic_decline"
+                source = None
             else:
                 answer = generate_offtopic_social_response(query)
                 response_type = "off_topic_social"
-
-            source = None
+                source = None
 
         # WLU retrieval
         else:

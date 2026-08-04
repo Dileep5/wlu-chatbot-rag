@@ -2576,6 +2576,29 @@ def _department_name_matches(department_name, question_lower):
         name_pattern = rf"\b{re.escape(name)}"
 
     if not re.search(name_pattern, question_lower):
+
+        # Sprint 2A (BUG4) - trailing-parenthetical base fallback. Stored
+        # names like "Computer Science (CP/PC Dept)" / "Geography (GG/ES)"
+        # append a code/campus parenthetical users never type - "Tell me
+        # about the Computer Science department" names only the base, so
+        # the whole-phrase check above fails and the department is
+        # unresolvable by name (it used to fall through to a program
+        # match instead). When the question explicitly names a department
+        # ("department"/"dept"), accept a whole-phrase match on the
+        # parenthetical's base. Gated on the department-naming word so a
+        # bare topic word ("tell me about geography") is never hijacked
+        # into a department match it didn't ask for.
+        if _DEPARTMENT_INTENT_PATTERN.search(question_lower):
+
+            paren = re.search(r"\s*\([^)]*\)\s*$", name)
+
+            if paren:
+                base = name[:paren.start()].strip()
+                if len(base) >= 3 and re.search(
+                    rf"\b{re.escape(base)}\b", question_lower
+                ):
+                    return True
+
         return False
 
     if " " in department_name.strip():
@@ -3302,6 +3325,23 @@ _RESEARCH_INTENT_PATTERNS = [
         r"is interested in|does research (?:on|in))\s+(.+)",
         re.IGNORECASE
     ),
+    # Sprint 2A (BUG3): "Which professors work in Artificial
+    # Intelligence?" - the professor/faculty + work/teach/research
+    # phrasing names a research TOPIC, not a course (see the course-defer
+    # guard at the COURSE branch of structured_search). These run AFTER
+    # the plain "who researches X" pattern above so that phrasing keeps
+    # its exact current behavior, and the embedding distance threshold
+    # downstream is the real gate - a topic with no faculty match simply
+    # returns None and the query falls through as before.
+    re.compile(
+        r"(?:which|what)?\s*professors?\s+(?:who\s+)?"
+        r"(?:work|teach|research|specialize)\s+(?:in|on)\s+(.+)",
+        re.IGNORECASE
+    ),
+    re.compile(
+        r"faculty\s+(?:who\s+)?(?:work|research|specialize)\s+(?:in|on)\s+(.+)",
+        re.IGNORECASE
+    ),
     re.compile(r"research(?:ers?)?\s+(?:on|in|about)\s+(.+)", re.IGNORECASE),
     re.compile(
         r"i want to (?:study|research|learn about)\s+(.+)", re.IGNORECASE
@@ -3322,6 +3362,24 @@ _RESEARCH_TOPIC_TRAILING_PHRASES = (
 # beyond that mixes in progressively weaker/unrelated matches. Kept as a
 # named constant since it's a calibrated value, not an arbitrary one.
 _RESEARCH_TOPIC_DISTANCE_THRESHOLD = 1.0
+
+# Sprint 2A (BUG3) - course-defer guard. "Which professors work in
+# Artificial Intelligence?" asks about PEOPLE in a research area, but the
+# course branch of structured_search matches the topic word against the
+# course name ("Artificial Intelligence" = CP468) and answers with the
+# course before the RESEARCH TOPIC aggregation is ever reached. When this
+# narrow phrasing fires (an explicit professors/faculty + work/teach/
+# research + in/on pattern), the COURSE branch is skipped so execution
+# reaches search_faculty_by_research_topic() below - which is itself
+# self-limiting via the embedding distance threshold (no faculty match ->
+# None -> the query falls through unchanged). Complements the two
+# professor/faculty patterns added to _RESEARCH_INTENT_PATTERNS.
+_FACULTY_RESEARCH_PHRASING_PATTERN = re.compile(
+    r"\b(?:which|what)\s+professors?\s+(?:work|teach|research)\s+(?:in|on)\b|"
+    r"\bprofessors?\s+(?:who\s+)?(?:work|teach|research|specialize)\s+(?:in|on)\b|"
+    r"\bfaculty\s+(?:who\s+)?(?:work|research|teach|specialize)\s+(?:in|on)\b",
+    re.IGNORECASE,
+)
 
 
 def _extract_research_topic(question):
@@ -4418,10 +4476,25 @@ def structured_search(question, memory=None):
 
     # COURSE
 
-    result = search_course(question, memory)
+    # Sprint 2A (BUG3) - faculty research-topic phrasing. "Which
+    # professors work in Artificial Intelligence?" names a research TOPIC,
+    # not the course whose name happens to contain it (CP468 "Artificial
+    # Intelligence") - without this guard search_course() matches on the
+    # topic word and answers with the course, and the RESEARCH TOPIC
+    # aggregation below (the professors who actually work in the area) is
+    # never reached. Skipping the course branch lets execution continue
+    # to search_faculty_by_research_topic() - the pattern is narrow and
+    # the embedding distance threshold there is the real gate, so a
+    # phrasing with no faculty match falls through unchanged.
+    faculty_research_phrasing = _FACULTY_RESEARCH_PHRASING_PATTERN.search(
+        question_lower
+    )
 
-    if result:
-        return _course_card_response(result)
+    if not faculty_research_phrasing:
+        result = search_course(question, memory)
+
+        if result:
+            return _course_card_response(result)
 
     # A code-shaped token is present (e.g. "CP999") but search_course()
     # found no matching row - definitive enough to answer immediately
@@ -4946,6 +5019,19 @@ _INTENT_REWRITE_RULES = [
 # program/department was established MORE RECENTLY wins.
 _COORDINATOR_REWRITE_PATTERN = re.compile(r"\bcoordinat\w*\b", re.IGNORECASE)
 
+# Sprint 2A (BUG6) - a bare campus-qualifier follow-up ("For Brantford?",
+# "At Waterloo?", "For the Milton campus?"). The qualifier alone names no
+# entity the type/person/generic reference loops can resolve - it modifies
+# the conversation's current TOPIC, which for vector-answered intent turns
+# is recorded as a "topic" entity (see hybrid_search). Strictly whole-query
+# anchored so a full question that merely ends in a campus name ("Where
+# can I study at Waterloo?") is never intercepted as a follow-up.
+_CAMPUS_QUALIFIER_PATTERN = re.compile(
+    r"^(?:(?:what|how)\s+about\s+|and\s+)?(?:for|in|at)\s+(?:the\s+)?"
+    r"(waterloo|brantford|milton)(?:\s+campus)?[.?!]*\s*$",
+    re.IGNORECASE,
+)
+
 _COORDINATOR_REWRITE_TEMPLATES = {
     "program": "Who is the program coordinator for {value}?",
     # Deliberately phrased as a full sentence (not just the bare
@@ -5199,6 +5285,29 @@ def resolve_contextual_reference(question, memory=None):
         return None
 
     question_lower = question.lower()
+
+    # Sprint 2A (BUG6) - campus-qualifier follow-up, checked before the
+    # reference loops because the qualifier carries no reference marker
+    # for them to trigger on. "For Brantford?" qualifies the current
+    # TOPIC (recorded as a "topic" entity when a convocation intent turn
+    # is answered through hybrid_search), so it is rewritten to
+    # "<topic> <campus>" and answered through hybrid_search - reusing the
+    # prior context instead of answering the bare qualifier fresh
+    # (confirmed: "For Brantford?" after "When is Fall2026 convocation?"
+    # was answered without any memory of the prior question). Falls
+    # through unchanged when no topic entity exists or the rewritten
+    # query fails the vector gate.
+    campus_match = _CAMPUS_QUALIFIER_PATTERN.search(question_lower)
+
+    if campus_match:
+        topic_entity = _latest_entity_of_type(memory, "topic")
+        if topic_entity is not None:
+            rewritten = (
+                f"{topic_entity['entity_id']} {campus_match.group(1)}"
+            )
+            result = hybrid_search(rewritten, memory)
+            if result is not None and result[2] != "not_found":
+                return ("resolved",) + result
 
     if _COMPARE_PATTERN.search(question_lower):
         return _compare_clarification(memory)
@@ -5674,6 +5783,33 @@ _IP_WRITING_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Direct Writing Centre ENTITY queries ("Where is the Writing Centre?",
+# "Writing Services hours", "writing support location") name the service
+# itself rather than one of its activities, so the appointment/location/
+# booking/email detail lives behind every conditional writing facet. When
+# this fires, the conditional facets' `when` gates are bypassed so the
+# full set (programs + appointments + resources) is aggregated even for a
+# query with no appointment/resource token - the physical location of the
+# Writing Centre (One Market OM207 / Peters Building, 2nd floor P226) is
+# on the appointments page and was being missed exactly this way.
+_IP_WRITING_CENTRE_QUERY = re.compile(
+    r"\bwriting (?:centre|center|services?|support)\b|"
+    r"\bwhere (?:is|are)\b.{0,25}?\bwriting\b",
+    re.IGNORECASE,
+)
+
+# Convocation intent (Sprint 2A, BUG6): "When is Fall 2026 convocation?"
+# was answered from the general Important Dates page, which surfaces only
+# the Waterloo dates - the ceremonies page's own Fall 2026 table (with the
+# separate Brantford ceremony) lost the winner slot. Aggregating the
+# ceremonies page as a facet puts the complete date table in context and
+# makes "For Brantford?" resolvable (the campus qualifier reuses the
+# topic entity recorded below when this fires).
+_IP_CONVOCATION_PATTERN = re.compile(
+    r"\bconvocation\b",
+    re.IGNORECASE,
+)
+
 _IP_INTENTS = [
     {
         "id": "graduate",
@@ -5723,6 +5859,7 @@ _IP_INTENTS = [
     {
         "id": "writing",
         "pattern": _IP_WRITING_PATTERN,
+        "when_override": _IP_WRITING_CENTRE_QUERY,
         "facets": [
             ("Writing Support Programs",
              "writing/writing-support-programs", None),
@@ -5732,10 +5869,31 @@ _IP_INTENTS = [
              "student-success/resources", _IP_WRITING_RES),
         ],
     },
+    {
+        "id": "convocation",
+        "pattern": _IP_CONVOCATION_PATTERN,
+        # The ceremony date table is the entire point of this facet, so
+        # it must not be silently lost when the ceremonies page is
+        # already present as a Sprint C secondary - the secondary
+        # mechanism caps how many of its chunks survive (chunk count +
+        # total secondary-char budget), and with a busy pool that cap
+        # drops the Brantford row while keeping the Waterloo rows (the
+        # Brantford chunk ranks below the Waterloo/exceptions chunks on
+        # a generic "convocation" query). force_page makes the facet
+        # aggregation run for this page even when its URL is already in
+        # included_urls; the near-duplicate filter then naturally drops
+        # the chunks already in context and adds only the missing ones
+        # (the Brantford ceremony row), so no content is duplicated.
+        "force_page": True,
+        "facets": [
+            ("Convocation Ceremonies",
+             "convocation/ceremonies/index.html", None),
+        ],
+    },
 ]
 
 _IP_MAX_FACET_PAGES = 3
-_IP_MAX_CHUNKS_PER_FACET = 2
+_IP_MAX_CHUNKS_PER_FACET = 3
 _IP_MAX_FACET_CHARS = 9000
 _IP_FACET_TOP_K = 4
 
@@ -5755,6 +5913,18 @@ def _plan_intent(question):
     return None
 
 
+def intent_id(question):
+    """Public wrapper for the intent planner: the id of the Sprint E
+    intent that fires for `question` ('graduate', 'wellness',
+    'international', 'writing', 'convocation'), or None. Used by app.py's
+    wellness rescue so the deterministic intent planner can run BEFORE the
+    off-topic gate decides how to answer ("I'm stressed." fires the
+    wellness intent but fails the keyword/LLM domain check, and would
+    otherwise get a social decline instead of WLU wellness resources)."""
+    intent = _plan_intent(question)
+    return intent["id"] if intent else None
+
+
 def _aggregate_intent_facets(intent, question, winner_url, included_urls,
                              included_token_sets):
     """Fetch the intent's canonical facet pages as labeled secondary
@@ -5765,9 +5935,19 @@ def _aggregate_intent_facets(intent, question, winner_url, included_urls,
     facet_chars = 0
     included_urls = set(included_urls)
 
+    # A direct entity query ("Where is the Writing Centre?") names the
+    # service, not one of its activities - every conditional facet's
+    # `when` gate is bypassed so the full detail set (which for the
+    # Writing Centre includes the physical location on the appointments
+    # page) reaches the context. No-op for every other intent/query.
+    when_override = intent.get("when_override")
+    override_fires = (
+        when_override is not None and when_override.search(q_lower)
+    )
+
     for label, url_fragment, when in intent["facets"]:
 
-        if when is not None and not when.search(q_lower):
+        if when is not None and not when.search(q_lower) and not override_fires:
             continue
 
         if len(groups) >= _IP_MAX_FACET_PAGES:
@@ -5784,8 +5964,17 @@ def _aggregate_intent_facets(intent, question, winner_url, included_urls,
         )
 
         # The canonical page is absent from the corpus (refresh/rename)
-        # or already cited (winner / Sprint C secondary) - skip.
-        if page_url is None or page_url in included_urls:
+        # or already cited (winner / Sprint C secondary) - skip. A facet
+        # that sets force_page (convocation) is the exception: the whole
+        # point of that facet is the complete date table, and the
+        # secondary mechanism may have only kept a subset of the page's
+        # chunks (dropping e.g. the Brantford ceremony row). Forcing the
+        # aggregation to run anyway is safe because the near-duplicate
+        # filter below drops every chunk already in context and only the
+        # missing ones survive.
+        if page_url is None:
+            continue
+        if page_url in included_urls and not intent.get("force_page"):
             continue
 
         page_chunks = [
@@ -6197,6 +6386,18 @@ def hybrid_search(question, memory=None):
         facet_groups = _aggregate_intent_facets(
             intent, question, winner_url,
             source_urls, included_token_sets,
+        )
+
+    # Sprint 2A (BUG6) - record a "topic" entity for vector-answered
+    # intent queries so a follow-up can resolve against it. The campus
+    # qualifier in resolve_contextual_reference ("For Brantford?", "At
+    # Waterloo?") rewrites "<topic> <campus>" and answers through
+    # hybrid_search - without this write the follow-up had no established
+    # context to reuse (entity_history was empty after a convocation
+    # turn) and was answered fresh, ignoring the prior question.
+    if intent is not None and intent["id"] == "convocation":
+        _record_entity(
+            memory, "topic", "convocation", "Convocation", "hybrid_search",
         )
 
     for index, group in enumerate(
