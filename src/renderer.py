@@ -625,6 +625,12 @@ _COURSE_CARD_FIELDS = [
     "Course Code",
     "Course Name",
     "Credits",
+    # Production Polish Sprint: "Department" was already a recognized
+    # label boundary above (_COURSE_FIELD_LABELS) and already present in
+    # every course's raw context (retriever.py's _course_card_response())
+    # but was never in this displayed-fields list, so it was silently
+    # dropped from every course card.
+    "Department",
     "Prerequisites",
     "Description",
     "Corequisites",
@@ -707,6 +713,7 @@ def render_course(answer, source, summary=None):
 
     meta_items = [
         ("Credits", fields.get("Credits")),
+        ("Department", fields.get("Department")),
         ("Prerequisites", fields.get("Prerequisites")),
         ("Corequisites", fields.get("Corequisites")),
         ("Exclusions", fields.get("Exclusions")),
@@ -1267,6 +1274,12 @@ _DEPARTMENT_FIELD_LABELS = [
     "Department",
     "Faculty",
     "Level",
+    # Production Polish Sprint: recognized as a boundary and displayed
+    # (see _DEPARTMENT_CARD_FIELDS/render_department() below) - distinct
+    # from the entity-prefixed "Department Coordinator" label the
+    # separate "coordinator" response_type produces (routed through
+    # render_program(), never this parser), so no collision.
+    "Coordinator",
     "Programs",
     "Description",
 ]
@@ -1279,6 +1292,7 @@ _DEPARTMENT_CARD_FIELDS = [
     "Department",
     "Faculty",
     "Level",
+    "Coordinator",
     "Programs",
     "Description",
 ]
@@ -1330,6 +1344,9 @@ def render_department(answer, source, summary=None):
 
     body_sections = [
         _meta_grid_html(meta_items),
+        _section_html(
+            "Coordinator", _text_html(fields.get("Coordinator")), icon="person",
+        ),
         _section_html("Programs", _text_html(fields.get("Programs")), icon="book"),
         _section_html("Overview", _text_html(fields.get("Description")), icon="document"),
     ]

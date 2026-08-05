@@ -4265,22 +4265,17 @@ _PROGRAM_OVERVIEW_PATTERN = re.compile(
 )
 
 
-def _program_overview_context():
-    """Deterministic university-wide summary: total program count broken
-    down by level, and the distinct faculties/schools offering them.
-    Faculty names are normalized (periods/whitespace collapsed, compared
-    case-insensitively) purely to de-duplicate a known data quirk -
+def _distinct_faculty_names():
+    """The distinct faculties/schools in departments.db, de-duplicated.
+    Names are normalized (periods/whitespace collapsed, compared
+    case-insensitively) purely to collapse a known data quirk -
     departments.db has both "Lyle S. Hallman Faculty of Social Work" and
     "Lyle S Hallman Faculty of Social Work" for the same faculty - into
-    one bullet instead of two near-identical entries that would read as
-    a formatting bug. Display spelling is kept from whichever variant
-    sorts first, not rewritten."""
-
-    conn = sqlite3.connect("data/programs.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT level, COUNT(*) FROM programs GROUP BY level")
-    level_counts = dict(cursor.fetchall())
-    conn.close()
+    one entry instead of two near-identical ones that would read as a
+    formatting bug. Display spelling is kept from whichever variant
+    sorts first, not rewritten. Shared by every deterministic aggregate
+    that lists faculties (_program_overview_context(),
+    _university_overview_context())."""
 
     conn = sqlite3.connect("data/departments.db")
     cursor = conn.cursor()
@@ -4304,6 +4299,21 @@ def _program_overview_context():
         seen_keys.add(key)
         faculties.append(name)
 
+    return faculties
+
+
+def _program_overview_context():
+    """Deterministic university-wide summary: total program count broken
+    down by level, and the distinct faculties/schools offering them."""
+
+    conn = sqlite3.connect("data/programs.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT level, COUNT(*) FROM programs GROUP BY level")
+    level_counts = dict(cursor.fetchall())
+    conn.close()
+
+    faculties = _distinct_faculty_names()
+
     undergrad = level_counts.get("undergraduate", 0)
     graduate = level_counts.get("graduate", 0)
     total = undergrad + graduate
@@ -4319,6 +4329,136 @@ def _program_overview_context():
         f"and combined programs.\n\n"
         f'Ask about a specific program, department, or faculty for full '
         f'details (e.g. "Tell me about the Computer Science program").'
+    )
+
+
+# --- Broad "about the university" questions ---
+#
+# A genuinely broad "tell me about this university" question has no
+# single winning page for hybrid_search's embedding search to land on -
+# confirmed live, that exact wording retrieved an unrelated McGill
+# scholarship chunk, and "Tell me about WLU" retrieved an IT-governance
+# policy chunk. Answered deterministically here for the same
+# hallucination-safety reason as every other structured type: every
+# figure below is a live COUNT from the same structured DB tables every
+# other structured response type already reads (programs.db/
+# departments.db/courses.db/faculty.db), never an estimate, and never
+# routed through vector similarity search at all.
+#
+# Reached only after every specific PROGRAM/DEPARTMENT/FACULTY/COURSE/
+# RESEARCH check above (and the narrower _PROGRAM_OVERVIEW_PATTERN check
+# just above) has already failed to match, so this can never preempt a
+# real "What is the Computer Science program?" or "What programs does
+# WLU offer?" lookup.
+_UNIVERSITY_OVERVIEW_PATTERN = re.compile(
+    r"\b(?:tell me (?:more )?about|what is|what's|know more about)\b"
+    r"[^.?!]{0,20}"
+    r"\b(?:wlu|laurier|wilfrid laurier(?:\s+university)?|this\s+university|"
+    r"the\s+university)\b"
+    r"|\babout\s+(?:wlu|laurier|this\s+university|the\s+university)\b",
+    re.IGNORECASE,
+)
+
+# Guards both this pattern and _PROGRAM_OVERVIEW_PATTERN above against
+# their "university"/"the university" wording matching a DIFFERENT
+# school's name - confirmed live, "What is the tuition at the
+# University of Toronto?" matched "the university" and returned a
+# confident WLU overview instead of correctly declining as out-of-
+# domain, a real hallucination-class regression caught by the
+# benchmark's out-of-domain suite. Deliberately narrower than
+# domain_guard's own _mentions_other_institution() - that function also
+# flags a bare "this university"/"the university" alone as naming some
+# OTHER school (tested live: true for "I want to know more about this
+# university", the exact query this feature exists to answer), which
+# would have broken the primary case. Only fires for an actual
+# "University of X" construction or a specific, named other
+# institution, never a generic reference back to "this"/"the"
+# university.
+_OTHER_UNIVERSITY_PATTERN = re.compile(
+    r"\buniversity\s+of\s+(?!wilfrid\b|laurier\b)\w+"
+    r"|\b(?:harvard|mit|yale|oxford|cambridge|stanford|princeton|"
+    r"mcgill|queen'?s|guelph|western|york|ottawa|windsor|brock|"
+    r"carleton|ryerson|toronto\s+metropolitan)\s+university\b",
+    re.IGNORECASE,
+)
+
+# Real, ingested campus location tokens (courses.db's location_text
+# column) - only a name that's actually PRESENT in the ingested data is
+# ever shown, so this can never state a campus that isn't grounded in
+# real corpus content, and silently reflects the current data if the
+# corpus is later re-ingested with different coverage.
+_CAMPUS_TOKENS = ("Waterloo", "Brantford", "Toronto", "Kitchener", "Milton")
+
+
+def _grounded_campuses():
+
+    conn = sqlite3.connect("data/courses.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT DISTINCT location_text FROM courses "
+        "WHERE location_text IS NOT NULL AND location_text != ''"
+    )
+    raw_text = " ".join(row[0] for row in cursor.fetchall()).lower()
+    conn.close()
+
+    return [name for name in _CAMPUS_TOKENS if name.lower() in raw_text]
+
+
+def _university_overview_context():
+    """Deterministic, fully grounded university-wide overview. States
+    only counts and facts directly computable from the ingested data
+    (programs.db/departments.db/courses.db/faculty.db); omits anything
+    not actually available (e.g. student population isn't tracked
+    anywhere in this corpus) rather than estimating it - the same
+    "only show what's actually present" discipline
+    _program_overview_context() above already follows."""
+
+    conn = sqlite3.connect("data/programs.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT level, COUNT(*) FROM programs GROUP BY level")
+    level_counts = dict(cursor.fetchall())
+    conn.close()
+
+    undergrad = level_counts.get("undergraduate", 0)
+    graduate = level_counts.get("graduate", 0)
+    total_programs = undergrad + graduate
+
+    faculties = _distinct_faculty_names()
+
+    conn = sqlite3.connect("data/departments.db")
+    department_count = conn.execute(
+        "SELECT COUNT(*) FROM departments"
+    ).fetchone()[0]
+    conn.close()
+
+    conn = sqlite3.connect("data/faculty.db")
+    faculty_member_count = conn.execute(
+        "SELECT COUNT(*) FROM faculty"
+    ).fetchone()[0]
+    conn.close()
+
+    campuses = _grounded_campuses()
+
+    campus_line = (
+        f"Campuses: {', '.join(campuses)}\n\n" if campuses else ""
+    )
+
+    faculty_list = "\n".join(f"- {name}" for name in faculties)
+
+    return (
+        f"Wilfrid Laurier University (WLU) offers {total_programs} "
+        f"programs ({undergrad} undergraduate, {graduate} graduate) "
+        f"across {len(faculties)} faculties and schools, delivered "
+        f"through {department_count} departments and over "
+        f"{faculty_member_count} faculty members.\n\n"
+        f"{campus_line}"
+        f"Faculties and Schools:\n{faculty_list}\n\n"
+        f"Faculty across these departments conduct research spanning "
+        f'many disciplines - ask about research in a specific area '
+        f'(e.g. "Who researches artificial intelligence?") to explore '
+        f"further.\n\n"
+        f"Ask about a specific program, course, faculty member, or "
+        f"department for full details."
     )
 
 
@@ -4779,11 +4919,21 @@ def structured_search(question, memory=None):
             return (context, result[3], "coordinator")
 
         faculty_name = result["faculty_name"]
+        coordinator = result["coordinator"]
 
+        # Production Polish Sprint: the department profile card never
+        # showed the coordinator inline - it was only reachable through
+        # a separate "who is the coordinator of X" fact-lookup question
+        # (the branch just above), even though departments.db already
+        # has the data on the very same row. Added here, "only if
+        # populated" (same discipline as every other optional field in
+        # this context - Faculty/Level above), so a department with no
+        # coordinator on file renders exactly as before.
         context = f"""
 Department: {result[0]}
 {f"Faculty: {faculty_name.strip()}" if faculty_name and faculty_name.strip() else ""}
 {_department_level_line(result)}
+{f"Coordinator: {coordinator.strip()}" if coordinator and coordinator.strip() else ""}
 Programs:
 {result[1]}
 
@@ -4926,10 +5076,27 @@ Research Interests:
     # BROAD PROGRAM-OVERVIEW
     # Reached only once every specific PROGRAM/DEPARTMENT/FACULTY/
     # RESEARCH check above has already failed to match - see
-    # _PROGRAM_OVERVIEW_PATTERN's own comment.
-    if _PROGRAM_OVERVIEW_PATTERN.search(question_lower):
+    # _PROGRAM_OVERVIEW_PATTERN's own comment. _OTHER_UNIVERSITY_PATTERN
+    # guard: see that pattern's own comment (regression fix).
+    if (
+        _PROGRAM_OVERVIEW_PATTERN.search(question_lower)
+        and not _OTHER_UNIVERSITY_PATTERN.search(question_lower)
+    ):
 
         return (_program_overview_context(), None, "program_overview")
+
+    # BROAD "ABOUT THE UNIVERSITY" OVERVIEW
+    # Checked after the narrower program-overview pattern immediately
+    # above, so "Tell me about WLU's programs" still resolves to the
+    # program-specific summary rather than the more generic one here -
+    # see _UNIVERSITY_OVERVIEW_PATTERN's own comment. Same
+    # _OTHER_UNIVERSITY_PATTERN guard as immediately above.
+    if (
+        _UNIVERSITY_OVERVIEW_PATTERN.search(question_lower)
+        and not _OTHER_UNIVERSITY_PATTERN.search(question_lower)
+    ):
+
+        return (_university_overview_context(), None, "university_overview")
 
     # POLICY INDEX (Phase 2)
     # Gated on the word "policy"/"policies" (see search_policy's own

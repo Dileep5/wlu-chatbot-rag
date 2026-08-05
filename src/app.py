@@ -171,6 +171,10 @@ DETERMINISTIC_RESPONSE_TYPES = {
     # aggregate list type above (faculty_list/research/...), never an
     # LLM paraphrase that could drift from the real counts.
     "program_overview",
+    # Same reasoning, for the broad "tell me about this university"
+    # overview (retriever.py's _university_overview_context()) - every
+    # figure in it is a live DB count, never an LLM paraphrase.
+    "university_overview",
 }
 
 
@@ -193,6 +197,29 @@ DETERMINISTIC_RESPONSE_TYPES = {
 # invent a heading whose content is absent from the retrieved text"
 # rule, so a wrong topic can only change layout, never add content.
 # ------------------------------------------------------------------
+
+
+# Production Polish Sprint: shared negative-instruction fragment against
+# generic AI-chatbot filler ("Sounds fascinating!", "Sounds like a great
+# opportunity!", "I'm sure they'd be happy to help!", "Hope this helps!")
+# - confirmed live, gpt-4o-mini at temperature 0.7-0.8 readily produces
+# this kind of canned enthusiasm when a prompt only says "be friendly"
+# with no explicit guardrail against it. Appended to every prompt that
+# generates free-form user-facing text (VECTOR_SYSTEM_PROMPT,
+# generate_chat_response(), generate_grounded_summary()) so tone is
+# consistent everywhere, not just the main answer path. Never touches a
+# grounding/content rule - purely a wording constraint.
+_NO_FILLER_INSTRUCTION = """
+Tone: write like a knowledgeable
+university information assistant -
+direct, clear, and professional, not
+a casual chatbot. Avoid generic
+AI-assistant filler and canned
+enthusiasm - never say things like
+"Sounds fascinating!", "Sounds like
+a great opportunity!", "I'm sure
+they'd be happy to help!", or "Hope
+this helps!"."""
 
 
 # The new Sprint B system prompt for the `vector` answer path. Preserves
@@ -317,7 +344,7 @@ Conversational follow-ups (occasional, situational):
   actually contain it - only ask about
   a distinction that's genuinely
   present in the retrieved information.
-"""
+""" + _NO_FILLER_INSTRUCTION
 
 
 _VECTOR_TOPIC_PATTERNS = [
@@ -621,14 +648,12 @@ def generate_chat_response(query):
                 "role": "system",
                 "content":
                 """
-You are a friendly AI assistant
-for Wilfrid Laurier University.
+You are the official AI information
+assistant for Wilfrid Laurier
+University.
 
-Behave naturally like ChatGPT
-or Claude.
-
-You may have natural
-conversations with users.
+You may have natural, brief
+conversational exchanges with users.
 
 Examples:
 
@@ -636,11 +661,10 @@ Examples:
 - who are you
 - what can you do
 - do you know me
-- tell me a joke
 - what did i ask before
 
-Be friendly and conversational.
-                """
+Be professional, warm, and concise.
+                """ + _NO_FILLER_INSTRUCTION
             }
 
         ]
@@ -680,7 +704,7 @@ Be friendly and conversational.
 # paths to take. Deliberately kept SEPARATE from generate_chat_response()
 # above rather than extended in place - that function is also the
 # is_conversation() fast-path's generator (a fixed, already-regression-
-# tested list: "hi", "thanks", "tell me a joke", ...), and adding a
+# tested list: "hi", "thanks", "what can you do", ...), and adding a
 # mandatory "pivot to WLU" instruction there would change its existing,
 # already-verified behavior for every one of those cases too. A new,
 # narrowly-scoped function avoids that risk entirely.
@@ -794,7 +818,7 @@ def generate_offtopic_decline(query):
                     "excuse to slip in a real answer - the decline must "
                     "stay just as firm as a flat refusal, only phrased "
                     "more naturally."
-                )
+                ) + _NO_FILLER_INSTRUCTION
             },
             {
                 "role": "user",
@@ -894,32 +918,31 @@ def generate_grounded_summary(query, context, response_type):
         system_content = (
             (
                 "Using ONLY the facts listed below, answer the user's "
-                "question in 2-4 sentences the way a genuinely curious, "
-                "warm person would. This is a faculty member - cover "
-                "their title, faculty, department, research interests, "
-                "and any teaching/background the facts list, and mention "
-                "their office and email conversationally (e.g. 'their "
-                "office is ...', 'you can reach them at ...') when "
-                "present. Write everything as flowing prose - never "
-                "reproduce the facts' label-colon lines (Name:, Title:, "
-                "Email:, Office:) or any other field-name-then-colon "
-                "pattern. Do not add, infer, or estimate any name, "
-                "number, date, or requirement that isn't explicitly "
-                "present below; skip any field the facts omit."
+                "question in 2-4 sentences, clearly and professionally. "
+                "This is a faculty member - cover their title, faculty, "
+                "department, research interests, and any teaching/"
+                "background the facts list, and mention their office and "
+                "email plainly (e.g. 'their office is ...', 'they can be "
+                "reached at ...') when present. Write everything as "
+                "flowing prose - never reproduce the facts' label-colon "
+                "lines (Name:, Title:, Email:, Office:) or any other "
+                "field-name-then-colon pattern. Do not add, infer, or "
+                "estimate any name, number, date, or requirement that "
+                "isn't explicitly present below; skip any field the "
+                "facts omit."
             )
             if faculty_summary
             else (
                 "Using ONLY the facts listed below, answer the user's "
-                "question in 1-2 sentences the way a genuinely curious, "
-                "warm person would - conversational, with real "
-                "personality, never a dry textbook restatement. Do not "
-                "add, infer, or estimate any name, number, date, or "
-                "requirement that isn't explicitly present below. If the "
-                "listed facts don't fully answer the question, say what "
-                "they do cover and note what's missing - never fill the "
-                "gap from outside knowledge."
+                "question in 1-2 sentences, clearly and professionally - "
+                "never a dry textbook restatement. Do not add, infer, or "
+                "estimate any name, number, date, or requirement that "
+                "isn't explicitly present below. If the listed facts "
+                "don't fully answer the question, say what they do cover "
+                "and note what's missing - never fill the gap from "
+                "outside knowledge."
             )
-        )
+        ) + _NO_FILLER_INSTRUCTION
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -994,6 +1017,17 @@ FOLLOWUP_SUGGESTIONS = {
     ],
     "program": [
         {"label": "Who's coordinating this program?", "action": "coordinator"},
+        # Production Polish Sprint: tuition/scholarships aren't columns
+        # in programs.db (no structured resolver exists), so this reuses
+        # the same "ask_suggestion" mechanism VECTOR_TOPIC_SUGGESTIONS
+        # already relies on - the label is submitted verbatim as a real
+        # new question through the full pipeline (hybrid_search), so it
+        # has to be a complete, well-formed question, not a topic word
+        # (unlike the short imperative labels other entries above use,
+        # which go through _resolve_button_action()'s own fixed query
+        # template instead). Exact phrasing already proven to resolve
+        # well - it's one of app.py's own top-level SUGGESTED_QUESTIONS.
+        {"label": "What scholarships are available?", "action": "ask_suggestion"},
     ],
     "undergraduate_requirements": [
         {"label": "Who coordinates this program?", "action": "coordinator"},

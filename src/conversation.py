@@ -1,3 +1,9 @@
+# Production Polish Sprint: "tell me a joke" removed - it routed straight
+# to generate_chat_response() (app.py), which told an actual joke instead
+# of staying WLU-focused. No longer here, it falls through to the normal
+# off-topic pipeline (domain_guard.is_wlu_related() -> False ->
+# generate_offtopic_decline()), the same warm, WLU-focused redirect every
+# other out-of-domain request (weather, sports, trivia) already gets.
 conversation_patterns = [
 
     "how are you",
@@ -21,7 +27,6 @@ conversation_patterns = [
     "hey",
     "wassup",
     "what's up",
-    "tell me a joke",
     "who created you",
     "what are you",
     "can you help me"
