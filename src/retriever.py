@@ -7,7 +7,6 @@ from rapidfuzz.distance import Levenshtein
 from sentence_transformers import SentenceTransformer
 
 import hybrid_rerank
-from domain_guard import matches_wlu_keywords
 
 DB_DIR = "data/vector_db"
 MODEL_NAME = "all-MiniLM-L6-v2"
@@ -351,6 +350,18 @@ POLICIES_DB_READY = _table_exists("data/policies.db", "policies")
 # nothing legitimate while still guarding against degenerate entries.
 _COURSE_NAME_MIN_LENGTH = 4
 
+# The signal that gates a single-word course-name match (see
+# _search_course_by_name() below) - deliberately narrower than any
+# general WLU-domain keyword list: the query must reference a course as
+# a CONCEPT, not merely be WLU-related in some unrelated way (an
+# "international student" question, a "program" question, etc. are all
+# genuinely WLU-related without being about any specific course).
+_COURSE_CONTEXT_HINT_PATTERN = re.compile(
+    r"\bcourses?\b|\bclass(?:es)?\b|\bcredits?\b|\bprerequisites?\b|"
+    r"\bcorequisites?\b|\bsyllabus\b|\bsection\b|\bexclusions?\b",
+    re.IGNORECASE,
+)
+
 
 class _AmbiguousCourseMatch:
     """Sentinel returned by search_course() when a name-based lookup
@@ -416,7 +427,19 @@ def _search_course_by_name(question, memory=None):
     # own - vanishingly unlikely to appear by coincidence in an unrelated
     # sentence - so only single-word titles are held to the extra bar
     # below; every existing multi-word course-name match is unaffected.
-    has_domain_signal = matches_wlu_keywords(question)
+    #
+    # QA Fix Sprint regression: originally gated on matches_wlu_keywords()
+    # (any of ~80 generic WLU-domain words), which is too broad here -
+    # confirmed live, "I am an international student from Canada, what
+    # should I know?" matches "international student" (a real WLU
+    # keyword) and STILL matched the single-word "Canada" course title,
+    # reproducing the exact GG250 clarification bug for a query that has
+    # nothing to do with that course. Narrowed to a course-specific
+    # signal - the query must actually reference a course as a concept
+    # ("course", "class", "credits", "prerequisites", ...), not merely
+    # be WLU-related in general - since that's the only thing that
+    # actually justifies resolving a bare single word as a course name.
+    has_domain_signal = bool(_COURSE_CONTEXT_HINT_PATTERN.search(question))
 
     # Every distinct course name that appears as a whole-phrase,
     # word-boundary-bounded match in the question - e.g. "Operating
@@ -2347,6 +2370,64 @@ def search_undergraduate_program_list(question, memory=None):
     )
 
 
+# QA Fix Sprint: graduate mirror of the undergraduate list just above -
+# confirmed live, "What graduate programs does WLU offer?" had no
+# equivalent and fell through to hybrid_search's embedding search,
+# which landed on an unrelated "Faculty of Science" marketing page
+# instead of an actual program listing. Same intent-gating shape, same
+# deterministic programs.db query (level = 'graduate' instead of
+# 'undergraduate'), same truncation convention - deliberately identical
+# treatment, not a redesign (17 graduate programs total today, well
+# under the 30-item cap, so truncation_note is inert but kept for
+# consistency/future-proofing).
+def _has_graduate_program_list_intent(question_lower):
+
+    return bool(
+        "graduate" in question_lower
+        and "undergraduate" not in question_lower
+        and re.search(r"\bprograms?\b", question_lower)
+        and re.search(r"\b(?:available|offered|exist|list|what)\b", question_lower)
+    )
+
+
+def search_graduate_program_list(question, memory=None):
+
+    if not _has_graduate_program_list_intent(question.lower()):
+        return None
+
+    conn = sqlite3.connect("data/programs.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT DISTINCT program_name FROM programs "
+        "WHERE level = 'graduate' ORDER BY program_name"
+    )
+
+    names = [row[0] for row in cursor.fetchall()]
+
+    conn.close()
+
+    if not names:
+        return None
+
+    total = len(names)
+    displayed = names[:30]
+
+    lines = "\n".join(f"- {name}" for name in displayed)
+
+    truncation_note = (
+        f"\n(Showing {len(displayed)} of {total} graduate programs. "
+        f"Ask about a specific program by name for more detail.)"
+        if total > len(displayed) else ""
+    )
+
+    return (
+        f"Graduate programs at Wilfrid Laurier University "
+        f"include:\n{lines}\n{truncation_note}",
+        None
+    )
+
+
 # --- Fact-lookup intent: a reusable pattern, not a coordinator-specific
 # exception ---
 #
@@ -3775,7 +3856,20 @@ def _apply_faq_intent_boost(candidates, question):
 _SECTION_INTENT_PATTERNS = [
     (re.compile(
         r"\b(deadlines?|due|add\s*/\s*drop|withdraw|petitions?|appeals?|"
-        r"appealing|academic\s+calendars?|term\s+(?:starts?|begins?)|"
+        r"appealing|academic\s+calendars?|"
+        # QA Fix Sprint: "semester" added alongside "term" (users say
+        # both interchangeably; only "term" was covered), plus the
+        # reversed word order ("start date for winter term/semester",
+        # "beginning of the winter term") - confirmed live, "When does
+        # the winter semester start?" and "What is the start date for
+        # winter term?" both matched neither the old pattern nor any
+        # other structured/canonical-section signal and fell through to
+        # a wrong-page vector match (an orientation event page, an
+        # unrelated electives page) even though the real dates live on
+        # this exact canonical page.
+        r"(?:term|semester)\s+(?:starts?|begins?)|"
+        r"(?:starts?|begins?|start\s+dates?|beginning)\s+(?:of|for)\s+"
+        r"(?:the\s+)?(?:winter|fall|spring|summer)?\s*(?:term|semester)|"
         r"exam-?related|graduation|registration|important\s+dates?|"
         r"last\s+day\s+to\s+drop)",
         re.IGNORECASE,
@@ -3795,6 +3889,24 @@ _SECTION_INTENT_PATTERNS = [
         r"disabilit|racialized|2slgbtq|advising)",
         re.IGNORECASE,
     ), "/support-and-wellness/"),
+    # QA Fix Sprint: "Registrar"/"Student Services" contact questions -
+    # confirmed live, both fell through to an unrelated Financial Aid or
+    # IT Tech Services page. WLU's real corpus has no page literally
+    # named "Registrar" or "Student Services" (its actual institutional
+    # name for registration/records/admissions matters is "Service
+    # Laurier") - the genuinely relevant, grounded source is the
+    # official university contacts directory, which names Service
+    # Laurier explicitly ("connect with Service Laurier" for "records
+    # and registration") and lists real campus switchboard numbers.
+    # Deliberately scoped to CONTACT-intent phrasing only ("contact the
+    # registrar", "phone number for student services"), never a bare
+    # "student services" mention - that phrase is also legitimately used
+    # across many OTHER specific-service pages this must not hijack.
+    (re.compile(
+        r"\b(?:contact(?:\s+information)?|phone\s+number|email)\b"
+        r"[^.?!]{0,20}\b(?:registrar|student\s+services?)\b",
+        re.IGNORECASE,
+    ), "/about/contacts/"),
 ]
 
 # Canonical section intent boost. When the question's vocabulary names a
@@ -4332,6 +4444,47 @@ def _program_overview_context():
     )
 
 
+# --- Broad "what faculties/schools does WLU have" questions ---
+#
+# QA Fix Sprint: confirmed live, "What faculties are available at WLU?"
+# matched no existing structured branch and fell through to
+# hybrid_search, which landed on an IT-security-policy page purely
+# because it happened to contain the phrase "Faculty Profile Training" -
+# nowhere near an actual list of WLU's faculties/schools. Deterministic
+# here for the same reason as every other aggregate above; reuses
+# _distinct_faculty_names() (already shared by _program_overview_context()/
+# _university_overview_context()) rather than a third copy of the same
+# de-duplication logic.
+#
+# Gated on the PLURAL "faculties" specifically - unlike the singular
+# "faculty" (which this codebase's corpus/vocabulary uses for teaching
+# staff, e.g. "who is on the faculty", "which faculty teaches CP312"),
+# "faculties" unambiguously means the academic divisions (Faculty of
+# Science, Faculty of Arts, ...) in ordinary English, so this can never
+# collide with a person/instructor question.
+_FACULTY_LIST_QUERY_PATTERN = re.compile(
+    r"\b(?:what|which|all(?:\s+the)?|list(?:\s+of)?(?:\s+all)?)\s+"
+    r"faculties\b"
+    r"|\bfaculties\s+(?:does|do|is|are)\s+(?:wlu|laurier|(?:the\s+)?"
+    r"university)\s+(?:have|offer)\b",
+    re.IGNORECASE,
+)
+
+
+def _faculty_list_context():
+
+    faculties = _distinct_faculty_names()
+
+    faculty_list = "\n".join(f"- {name}" for name in faculties)
+
+    return (
+        f"Wilfrid Laurier University has {len(faculties)} faculties "
+        f"and schools:\n\n{faculty_list}\n\n"
+        f'Ask about a specific faculty for the departments and programs '
+        f'it offers.'
+    )
+
+
 # --- Broad "about the university" questions ---
 #
 # A genuinely broad "tell me about this university" question has no
@@ -4773,6 +4926,13 @@ def structured_search(question, memory=None):
     if program_list_result:
         return (*program_list_result, "undergraduate_program_list")
 
+    # GRADUATE PROGRAM LIST (QA Fix Sprint) - same reasoning as the
+    # undergraduate list immediately above.
+    grad_program_list_result = search_graduate_program_list(question, memory)
+
+    if grad_program_list_result:
+        return (*grad_program_list_result, "graduate_program_list")
+
     # PROGRAM
 
     result = search_program(question, memory)
@@ -5085,6 +5245,17 @@ Research Interests:
 
         return (_program_overview_context(), None, "program_overview")
 
+    # BROAD FACULTY/SCHOOL LIST (QA Fix Sprint) - checked before the
+    # generic university overview so "What faculties are available at
+    # WLU?" gets the focused list, not the full university summary. Same
+    # _OTHER_UNIVERSITY_PATTERN guard as the checks around it.
+    if (
+        _FACULTY_LIST_QUERY_PATTERN.search(question_lower)
+        and not _OTHER_UNIVERSITY_PATTERN.search(question_lower)
+    ):
+
+        return (_faculty_list_context(), None, "faculty_list_overview")
+
     # BROAD "ABOUT THE UNIVERSITY" OVERVIEW
     # Checked after the narrower program-overview pattern immediately
     # above, so "Tell me about WLU's programs" still resolves to the
@@ -5185,15 +5356,27 @@ _ORDINAL_POSITIONS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth":
 
 # Multi-word phrases that name the entity type explicitly - only that
 # one memory slot is ever tried, since the phrase itself is specific.
+# QA Fix Sprint: "this X" added alongside "that X"/"the X" for all four
+# types - confirmed live, "Tell me more about THIS program." (arguably
+# the most natural of the three phrasings) matched none of these
+# patterns and fell through to the generic reference loop below
+# instead, which has no per-type awareness and resolved back to
+# whatever entity was most recent regardless of type (the just-
+# established COURSE, not the program) - see _derive_parent_program()
+# for the other half of this fix.
 _TYPE_HINTED_PATTERNS = [
     (re.compile(r"\bthat professor\b", re.IGNORECASE), "faculty"),
     (re.compile(r"\bthe professor\b", re.IGNORECASE), "faculty"),
+    (re.compile(r"\bthis professor\b", re.IGNORECASE), "faculty"),
     (re.compile(r"\bthat course\b", re.IGNORECASE), "course"),
     (re.compile(r"\bthe course\b", re.IGNORECASE), "course"),
+    (re.compile(r"\bthis course\b", re.IGNORECASE), "course"),
     (re.compile(r"\bthat department\b", re.IGNORECASE), "department"),
     (re.compile(r"\bthe department\b", re.IGNORECASE), "department"),
+    (re.compile(r"\bthis department\b", re.IGNORECASE), "department"),
     (re.compile(r"\bthat program\b", re.IGNORECASE), "program"),
     (re.compile(r"\bthe program\b", re.IGNORECASE), "program"),
+    (re.compile(r"\bthis program\b", re.IGNORECASE), "program"),
 ]
 
 # "they"/"them"/"she"/"he"/"his"/"her"/"him" most commonly refer to a
@@ -5309,9 +5492,22 @@ _COORDINATOR_REWRITE_PATTERN = re.compile(r"\bcoordinat\w*\b", re.IGNORECASE)
 # is recorded as a "topic" entity (see hybrid_search). Strictly whole-query
 # anchored so a full question that merely ends in a campus name ("Where
 # can I study at Waterloo?") is never intercepted as a follow-up.
+#
+# QA Fix Sprint regression: the "what|how about" prefix used to still
+# require a following "for/in/at" (the original single alternation put
+# the prefix and the preposition in sequence, both effectively
+# mandatory) - confirmed live, "What about Waterloo?" after a Brantford
+# convocation question fell all the way through to the off-topic gate
+# instead of inheriting the convocation topic, even though "For
+# Brantford?" (same shape, different preposition) already worked.
+# "what|how about" is a complete, unambiguous qualifier on its own -
+# "for/in/at" is now optional after it, never required.
 _CAMPUS_QUALIFIER_PATTERN = re.compile(
-    r"^(?:(?:what|how)\s+about\s+|and\s+)?(?:for|in|at)\s+(?:the\s+)?"
-    r"(waterloo|brantford|milton)(?:\s+campus)?[.?!]*\s*$",
+    r"^(?:"
+    r"(?:what|how)\s+about\s+(?:(?:for|in|at)\s+)?"
+    r"|and\s+(?:for|in|at)\s+"
+    r"|(?:for|in|at)\s+"
+    r")(?:the\s+)?(waterloo|brantford|milton)(?:\s+campus)?[.?!]*\s*$",
     re.IGNORECASE,
 )
 
@@ -5375,10 +5571,16 @@ def _attempt_coordinator_resolution(memory):
     return ("clarify", _CLARIFICATION_MESSAGES[entity_type])
 
 
-def _attempt_contextual_resolution(question, pattern, type_priority, memory):
-
-    if _COORDINATOR_REWRITE_PATTERN.search(question):
-        return _attempt_coordinator_resolution(memory)
+def _attempt_intent_rewrite_resolution(question, memory):
+    """Checks each _INTENT_REWRITE_RULES pattern against the raw
+    question and, on a match, rewrites it against the relevant memory
+    entity and resolves through structured_search() - shared by
+    _attempt_contextual_resolution() below (pronoun-triggered, e.g.
+    "does it have prerequisites?") and resolve_contextual_reference()'s
+    own top-level check (bare, pronoun-less, e.g. "What about the
+    prerequisites?") so both phrasings of the same question resolve
+    identically. Returns None if no rule matches (caller decides what
+    to try next), never a false negative on a genuine match."""
 
     for rule_pattern, rule_type, template in _INTENT_REWRITE_RULES:
 
@@ -5400,9 +5602,70 @@ def _attempt_contextual_resolution(question, pattern, type_priority, memory):
 
         return ("clarify", _CLARIFICATION_MESSAGES[rule_type])
 
+    return None
+
+
+def _derive_parent_program(memory):
+    """When no program has been established directly but a COURSE has
+    (e.g. "What is CP683?" then "Tell me more about this program."),
+    looks up the course's containing program via
+    program_course_requirements - the same table
+    _handle_reverse_program_requirement_lookup() already uses for the
+    free-text "what program requires CP683?" question, just triggered
+    from the opposite direction (memory-driven, not a re-typed course
+    code). Confirmed live: without this, "this program" after CP683
+    fell through to the generic reference loop below, which has no
+    per-type awareness and resolved back to the COURSE itself (CP683
+    again) instead of its parent program (Master of Applied Computing).
+
+    Returns the program name only when exactly one program lists the
+    course as a requirement - a course shared by several programs (e.g.
+    a common elective) has no single "the" parent program to infer, so
+    this deliberately returns None (falls through to the ordinary
+    clarification) rather than guessing which one the user means."""
+
+    course_code = _resolve_typed_value(memory, "course")
+
+    if not course_code:
+        return None
+
+    code_match = re.match(r"\s*([A-Z]{2,4}\d{3}[A-Z]?)", course_code.upper())
+
+    if not code_match:
+        return None
+
+    conn = sqlite3.connect("data/programs.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT DISTINCT program_name FROM program_course_requirements "
+        "WHERE course_code = ?",
+        (code_match.group(1),)
+    )
+
+    programs = [row[0] for row in cursor.fetchall()]
+
+    conn.close()
+
+    return programs[0] if len(programs) == 1 else None
+
+
+def _attempt_contextual_resolution(question, pattern, type_priority, memory):
+
+    if _COORDINATOR_REWRITE_PATTERN.search(question):
+        return _attempt_coordinator_resolution(memory)
+
+    intent_result = _attempt_intent_rewrite_resolution(question, memory)
+
+    if intent_result:
+        return intent_result
+
     for entity_type in type_priority:
 
         value = _resolve_typed_value(memory, entity_type)
+
+        if not value and entity_type == "program":
+            value = _derive_parent_program(memory)
 
         if not value:
             continue
@@ -5617,6 +5880,22 @@ def resolve_contextual_reference(question, memory=None):
     # corroborate it.
     if _COORDINATOR_REWRITE_PATTERN.search(question_lower):
         return _attempt_coordinator_resolution(memory)
+
+    # QA Fix Sprint: same reasoning as the bare-coordinator check just
+    # above - a bare "What about the prerequisites?" (no pronoun) never
+    # reached _attempt_contextual_resolution() (only ever called once a
+    # pronoun/reference-marker pattern below has already matched), so it
+    # fell through this whole function with no course context at all.
+    # Confirmed live: after "What is CP683?", this returned an unrelated
+    # chemistry course's prerequisites instead of CP683's own -
+    # hybrid_search() had no idea "the prerequisites" meant CP683's.
+    # _INTENT_REWRITE_RULES's own patterns ("prerequisites?", "teach...")
+    # are themselves already unambiguous enough to need no pronoun,
+    # exactly like "coordinat..." above.
+    intent_result = _attempt_intent_rewrite_resolution(question_lower, memory)
+
+    if intent_result:
+        return intent_result
 
     for pattern, entity_type in _TYPE_HINTED_PATTERNS:
 

@@ -29,6 +29,11 @@ _PROGRAM_RESPONSE_TYPES = {
     "undergraduate_requirements",
     "graduate_requirements",
     "undergraduate_program_list",
+    # QA Fix Sprint: graduate mirror of undergraduate_program_list above
+    # (retriever.py's search_graduate_program_list()) - same reasoning,
+    # same fallback-to-plain-text rendering (no "Program:" label to
+    # parse, same as the undergraduate list).
+    "graduate_program_list",
     "coordinator",
 }
 

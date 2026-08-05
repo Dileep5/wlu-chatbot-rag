@@ -175,6 +175,11 @@ DETERMINISTIC_RESPONSE_TYPES = {
     # overview (retriever.py's _university_overview_context()) - every
     # figure in it is a live DB count, never an LLM paraphrase.
     "university_overview",
+    # QA Fix Sprint: the broad "what faculties does WLU have" list
+    # (retriever.py's _faculty_list_context()) - same reasoning, a
+    # complete deterministic list must never be paraphrased/truncated
+    # by an LLM.
+    "faculty_list_overview",
 }
 
 
