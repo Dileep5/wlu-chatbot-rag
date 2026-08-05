@@ -5,6 +5,10 @@ __pycache__/
 # VS Code
 .vscode/
 
+# Claude Code local settings (already excluded from Docker builds too -
+# see .dockerignore)
+.claude/
+
 # Mac
 .DS_Store
 
@@ -15,7 +19,12 @@ data/vector_db/
 # .github/workflows/weekly-refresh.yml, which uploads them as a workflow
 # artifact instead of committing them)
 logs/
+*.log
+
+# pytest
+.pytest_cache/
 
 # Python virtual environments
 venv/
+.venv/
 .env

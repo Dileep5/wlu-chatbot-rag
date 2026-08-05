@@ -3,8 +3,9 @@ name: Weekly Data Refresh
 # Runs the existing ingestion pipeline (crawler -> scrape -> clean ->
 # chunk -> structured DB rebuild -> vector DB rebuild) via
 # src/refresh_pipeline.py and commits the refreshed data/*.db,
-# outputs/*.csv, and urls.txt back to main. Does not touch retrieval,
-# ranking, prompting, renderer, or evaluation code.
+# data/corpus_metadata.json, outputs/*.csv, and urls.txt back to main.
+# Does not touch retrieval, ranking, prompting, renderer, or evaluation
+# code.
 on:
   schedule:
     # Every Sunday at 06:00 UTC.
@@ -46,7 +47,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/*.db outputs/*.csv urls.txt
+          git add data/*.db data/corpus_metadata.json outputs/*.csv urls.txt
           if git diff --cached --quiet; then
             echo "No data changes to commit."
           else

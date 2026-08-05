@@ -36,7 +36,7 @@ This project was built iteratively across a sequence of scoped phases (structure
 - **Source Citations with Retrieval Dates** — every grounded answer links back to the exact WLU page (with its real title, not just a bare URL) it was drawn from, alongside the date that content was retrieved from the live site.
 - **Off-topic Detection** — questions unrelated to WLU are declined gracefully instead of being answered or fabricated, with keyword and LLM-fallback coverage spanning every corpus category (courses/programs/faculty through Campus Services/Student Services/FAQs alike).
 - **Friendly Error Handling** — an unexpected internal error shows a plain, friendly message in the chat, never a raw Python exception, while the real error is still logged for whoever's operating the app.
-- **Automated Evaluation Framework** — a 234-check regression suite plus a 202-question deterministic benchmark spanning eleven categories, auto-generating a full markdown evaluation report on every run.
+- **Automated Evaluation Framework** — a 235-check regression suite plus a 202-question deterministic benchmark spanning eleven categories, auto-generating a full markdown evaluation report on every run.
 
 ---
 
@@ -102,6 +102,8 @@ The diagram shows the user-facing flow, top to bottom. A deterministic structure
 
 Every branch that finds a real, complete record renders it directly, with the LLM never invoked — this is what makes structured answers both fast and immune to LLM paraphrasing risk.
 
+Layered after the entity-specific cascade above, a handful of **deterministic aggregate answers** cover broad, entity-less questions that would otherwise have no single winning page for hybrid retrieval to land on ("What programs does WLU offer?", "What graduate programs does WLU offer?", "What faculties are available at WLU?", "Tell me about this university") — each is a live COUNT/list built directly from the same structured databases, never an LLM guess or a vector-search result, and each is checked only after every more specific entity match above has already failed, so none of them can preempt a real single-entity lookup.
+
 **The fact-lookup pattern** (steps 6, 8, and 9 above) is one reusable mechanism, not three bespoke ones: a shared trigger table maps "coordinator"/"advisor"/"chair"/"director" and "email"/"phone"/"office" to the one relevant field on whichever entity was matched, and returns a minimal `"<Entity>: <name>\n<Field>: <value>"` context instead of the entity's full description. It fixed a real bug where a program-coordinator question returned the entire program page (6,630 characters) with the actual answer buried at the bottom — now a 3-line, focused response. The corresponding card renderer (`renderer.py`) was updated alongside it so the answer displays as a clean card (a distinct "Coordinator" section, correctly labeled "🎓 Program" or "🏛️ Department") rather than the coordinator text being swallowed into a garbled card title. One caveat: the trigger words match specific literal forms — "director" (noun) is recognized, "directs" (verb) currently isn't.
 
 ---
@@ -143,17 +145,21 @@ The scraped corpus is built from a modular, quality-filtered ingestion pipeline 
 
 | Category | Pages crawled | Chunks embedded |
 |---|---|---|
-| Student Services | 381 | 1,216 |
+| Campus Services | 241 | 674 |
+| Academic Advising & Deadlines | 228 | 789 |
 | Policies | 175 | 985 |
-| Campus Services | 242 | 676 |
-| News (recent only) | 75 | 225 |
-| Academics + other general crawl | 81 | 308 |
+| Student Services & Wellness | 160 | 486 |
+| Academics + other general crawl | 80 | 307 |
+| Finances (scholarships/tuition/aid) | 77 | 283 |
+| News (recent only) | 75 | 226 |
+| Convocation | 73 | 257 |
 | FAQ | 14 | 59 |
-| Academic Deadlines | 7 | 59 |
 | Events | 5 | 0 *(see note below)* |
-| **Total** | **980** | **3,528** |
+| **Total** | **1,128** | **4,066** |
 
-Plus a separate, dedicated **Policies structured index** (`policies.db`) — 107 policies, indexed by number/title/source URL, layered on top of the full policy text also being vector-searchable.
+A later coverage audit found two entire sections that were missing from the original crawl allowlist — **Convocation** (`/academics/convocation/` — graduation dates, applying to graduate, ceremony logistics) and **Finances** (`/finances/` — scholarships, tuition/fee breakdowns, financial aid) — both now included above. Category boundaries have also shifted slightly since the table above was first written: Academic Deadlines is no longer crawled as its own separate section (it's a subpath of Academic Advising, now reported together), so it isn't broken out as its own row the way it once was.
+
+Plus a separate, dedicated **faculty-research vector index** (`wlu_faculty_research`, 588 chunks) backing "who researches X" queries, and a **Policies structured index** (`policies.db`) — 107 policies, indexed by number/title/source URL, layered on top of the full policy text also being vector-searchable.
 
 > **Note on Events:** the events crawl reaches only 5 pages producing 0 usable chunks — `events.wlu.ca` is a JavaScript-rendered calendar with no server-rendered text content; its only machine-readable outputs are JSON/RSS/ICS feeds, which are correctly rejected by content-type filtering. This is a known, accepted gap (see **Known Limitations**), not a bug.
 
@@ -175,7 +181,7 @@ Every grounded response carries a citation with three parts: **source page title
 
 Two complementary layers, both run automatically by `python3 src/evaluate.py`:
 
-### 1. Regression Suite (234 checks)
+### 1. Regression Suite (235 checks)
 Drives the real Streamlit app end-to-end via `streamlit.testing.v1.AppTest` — not unit tests against internal functions, but the actual application a user would interact with. Covers every shipped capability: conversation, structured retrieval, the fact-lookup pattern (coordinator/advisor/chair/director, faculty email/phone/office), follow-up resolution, hallucination prevention (including a dedicated regression test for the confidence-gate calibration fix), and scraper/extraction data integrity.
 
 ### 2. Benchmark (202 questions)
@@ -201,17 +207,17 @@ A deterministic, ground-truth benchmark stored entirely as data (`evaluation/ben
 
 | Metric | Value |
 |---|---|
-| Answer Accuracy | 99.0% |
-| Citation Accuracy | 89.6% (n=163 — questions where a citation was expected) |
-| Hallucination Rate | 4.5% (n=22 — see caveat below) |
-| Retrieval Success Rate | 99.4% |
-| Structured Retrieval Accuracy | 99.1% |
+| Answer Accuracy | 100.0% |
+| Citation Accuracy | 99.4% (n=163 — questions where a citation was expected) |
+| Hallucination Rate | 0.0% (n=22 — see caveat below) |
+| Retrieval Success Rate | 100.0% |
+| Structured Retrieval Accuracy | 100.0% |
 | Hybrid Retrieval Accuracy | 100.0% |
-| Average Response Time | ~1.2–1.3s |
+| Average Response Time | ~2.4–2.8s |
 
 **Two honest methodological caveats, documented here rather than left implicit:**
 - **Benchmark self-validation.** Structured-category questions are validated against the live system at *generation* time — a candidate entity whose name doesn't cleanly resolve through the system's own fuzzy-matching tiers is excluded rather than kept as a known failure case. Structured/Hybrid Retrieval Accuracy therefore measure *"how well the system performs on entities it can already resolve,"* not *"how well it performs on an unbiased random sample of every real WLU entity."*
-- **Hallucination Rate is measured over a small sample (n=22)** and depends on the LLM's grounding-prompt output, which runs at temperature 0.7 — the exact wording of a correct, grounded decline varies call to call. The evaluator recognizes declines via a semantic pattern (negation near an information-availability word: "does not contain," "doesn't specify," "does not define or outline"), which generalizes far better than a fixed phrase list but still cannot claim 100% recall over unbounded LLM phrasing. Recent runs have consistently landed at 4.5% (1 of 22) since the pattern-based detector replaced an earlier, narrower fixed-phrase version; earlier runs against the older detector saw values up to ~13% on the exact same underlying responses — i.e. that variance was a measurement artifact, not the system actually hallucinating more, and was root-caused and fixed rather than left unexplained.
+- **Hallucination Rate is measured over a small sample (n=22)** and depends on the LLM's grounding-prompt output, which runs at temperature 0.7 — the exact wording of a correct, grounded decline varies call to call. The evaluator recognizes declines via a semantic pattern (negation near an information-availability word: "does not contain," "doesn't specify," "does not define or outline"), which generalizes far better than a fixed phrase list but still cannot claim 100% recall over unbounded LLM phrasing. Recent runs have consistently landed at 0.0% (0 of 22); a single-digit-percent flake (1 of 22, from LLM phrasing variance rather than an actual grounding failure) has been observed on individual runs in the past, so treat one occasional miss on this specific check as expected noise, not a regression, before assuming the detector itself is over- or under-recognizing.
 
 Run the full framework:
 ```bash
@@ -252,7 +258,7 @@ WLU ChatBot/
 │   ├── domain_guard.py       # Out-of-domain (off-topic) detection
 │   ├── quality_filter.py     # robots.txt, URL/content dedup, content-type filtering
 │   ├── crawler.py            # Sitemap-driven + BFS crawl discovery
-│   ├── evaluate.py           # Regression suite (234 checks) + benchmark runner entry point
+│   ├── evaluate.py           # Regression suite (235 checks) + benchmark runner entry point
 │   ├── benchmark_runner.py   # Drives evaluation/benchmark.json through the real app
 │   ├── benchmark_report.py   # Generates evaluation_report.md
 │   ├── refresh_pipeline.py   # Orchestrates the full ingestion pipeline end-to-end
@@ -262,7 +268,9 @@ WLU ChatBot/
 │   │                         # Ingestion pipeline: scrape → clean → chunk → embed
 │   ├── get_*.py, load_*.py, save_*.py, sync_undergraduate.py
 │   │                         # Structured-data scraping/loading (courses, programs, faculty, departments)
-│   └── create_*_table.py     # Database schema creation scripts
+│   ├── create_*_table.py     # Database schema creation scripts
+│   └── legacy/                # Pre-current-architecture scripts, isolated here -
+│                               # not imported by the live app or ingestion pipeline
 ├── evaluation/
 │   ├── benchmark.json         # 202-question deterministic benchmark (data, not code)
 │   └── generate_benchmark.py  # Benchmark generator (reads live DBs, self-validates)
@@ -280,7 +288,7 @@ WLU ChatBot/
 
 `data/` is produced entirely by the ingestion pipeline and treated as a build artifact — it's only ever read by the live chatbot, never written to at runtime (`corpus_metadata.json` is the one exception, written once per ingestion run, not per query).
 
-> Several early-development / ad hoc debugging scripts (`chatbot.py`, `memory.py`, `intent_classifier.py`, `hybrid_retrieval.py`, `bm25_test.py`, `check_*.py`, `inspect_*.py`, several `test_*.py` scripts) still exist in `src/` from earlier iterations of the project and are not part of the live application or the ingestion pipeline. See **Known Limitations**.
+> Several early-development / ad hoc debugging scripts (`chatbot.py`, `memory.py`, `intent_classifier.py`, `hybrid_retrieval.py`, `bm25_test.py`, `check_*.py`, `inspect_*.py`, several `test_*.py` scripts) predate the current architecture and live under `src/legacy/`, isolated from the live application and the ingestion pipeline. See **Known Limitations**.
 
 ---
 
@@ -288,8 +296,8 @@ WLU ChatBot/
 
 ```bash
 # 1. Clone the repository
-git clone <repository-url>
-cd "WLU ChatBot"
+git clone https://github.com/Dileep5/wlu-chatbot-rag.git
+cd wlu-chatbot-rag
 
 # 2. Create and activate a virtual environment
 python3 -m venv venv
@@ -442,14 +450,14 @@ This pipeline only touches ingestion — retrieval, ranking, prompting, the resp
 
 ## Known Limitations
 
-- **Follow-ups need an explicit referring word.** Conversation memory resolves "it", "that", "this", "those", "these", "they", "them", and phrases like "the professor"/"the course" — across every tracked entity type, including policies — but a natural follow-up with no referring word at all isn't resolved. Gendered pronouns ("she"/"he"/"her"/"him") aren't recognized — only the neutral set above.
+- **Follow-ups need an explicit referring word.** Conversation memory resolves "it", "that", "this", "those", "these", "they", "them", "she"/"he"/"his"/"her"/"him", and phrases like "the professor"/"the course"/"this program" — across every tracked entity type, including policies — but a natural follow-up with no referring word at all isn't resolved.
 - **Deterministic name matching can collide with common words.** Last-name-only faculty matching is intentionally permissive (by design, to support genuine last-name-only queries), which means a query using a word that's also a real faculty surname can resolve to the wrong thing (confirmed example: "What is the capital of **France**?" fuzzy-matches faculty member "**Frances** Stewart"). This is a deliberate precision/recall tradeoff, not an oversight.
 - **The `events.wlu.ca` calendar has no usable coverage.** It's a JavaScript-rendered page with no server-rendered content; only non-HTML feeds (JSON/RSS/ICS) are available, which are correctly excluded by content-type filtering. Events questions currently fall back to whatever general context is available, or decline.
 - **Undergraduate department coordinators have no data at all (0 of 119 departments).** Graduate department coordinators are scraped correctly (27 of 33 populated, and confirmed clean after the latest data regeneration — see below); the undergraduate extraction path looks for a different page marker (`"[Chair]"`) that doesn't appear to match on current undergraduate department pages at all. Asking for an undergraduate department's coordinator gets a graceful "not available" answer, never a fabricated name — but the answer is never actually populated either. Investigating why the marker stopped matching is real, separate work (see **Future Work**), not something the graduate-side extraction fix touched.
 - **News coverage is intentionally recency-limited**, not comprehensive — the ~75 most recent articles by sitemap date, not the full historical archive. This was a deliberate choice after older news content was found to actively reduce retrieval relevance for unrelated queries.
 - **LLM-synthesized answers aren't infallible.** The hybrid-retrieval fallback path is grounded by an explicit anti-fabrication system prompt, but an LLM's compliance with that instruction, while extensively tested, isn't mathematically guaranteed on every possible phrasing — and the evaluation framework's own decline-detection has the same fundamental limit (see **Evaluation Framework**).
 - **Program comparison expects full official names.** "Compare Computer Science and Business Administration" may not trigger a true side-by-side comparison the way spelling out both full official program titles reliably does.
-- **The repository contains legacy development scripts** (`chatbot.py`, `memory.py`, `intent_classifier.py`, `hybrid_retrieval.py`, `bm25_test.py`, several `check_*.py`/`inspect_*.py`/`test_*.py` scripts) that predate the current architecture and are not imported or used by the live application or ingestion pipeline. They have not yet been archived — see **Future Work**.
+- **The repository contains legacy development scripts** (`chatbot.py`, `memory.py`, `intent_classifier.py`, `hybrid_retrieval.py`, `bm25_test.py`, several `check_*.py`/`inspect_*.py`/`test_*.py` scripts) that predate the current architecture. They're already isolated under `src/legacy/`, separate from the live application/pipeline code, and are not imported or used by either — see **Project Structure**. A few other one-off root-level artifacts from early development (`log.txt`, a raw debug log; `course_text.txt`, a scrape-test scratch file; `backup_before_app_fix/`, a superseded manual backup — git history already preserves every prior version) are likewise unused by the app and are candidates for removal.
 - **Not production-hardened.** There is no authentication, rate-limiting, or abuse protection — this is a local/classroom-demo deployment target, not a public-internet-facing service.
 
 ---
@@ -457,8 +465,7 @@ This pipeline only touches ingestion — retrieval, ranking, prompting, the resp
 ## Future Work
 
 - Investigate why undergraduate department pages no longer match the `"[Chair]"` coordinator marker (0 of 119 populated), and fix the extraction the same way the graduate-side over-extraction bug was fixed.
-- Archive or remove the legacy development scripts identified above, separating them from the live application/pipeline code.
-- Add gendered-pronoun support ("she"/"he"/"her"/"him") to follow-up resolution.
+- Remove the legacy development scripts under `src/legacy/` and the other unused root-level artifacts identified above, once confirmed nothing else references them.
 - Recognize verb-form fact-lookup triggers ("directs" alongside "director," etc.) in the fact-lookup pattern, not just the currently-recognized noun/gerund forms.
 - Investigate a targeted fix for the fuzzy last-name-matching collision class (e.g. "France"/"Frances") without weakening genuine last-name-only queries.
 - Extend program comparison to accept informal or abbreviated program names, not just full official titles.
