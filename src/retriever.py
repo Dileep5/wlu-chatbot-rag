@@ -3,6 +3,8 @@ import sqlite3
 import re
 from collections import deque
 import chromadb
+import streamlit as st
+import streamlit.runtime as st_runtime
 from rapidfuzz.distance import Levenshtein
 from sentence_transformers import SentenceTransformer
 
@@ -121,38 +123,108 @@ def _rebuild_faculty_research_collection(chroma_client, embedding_model):
     return rebuilt
 
 
-try:
-    collection = client.get_collection("wlu_chatbot_chunks")
-except Exception:
-    # No silent fallback here (unlike faculty-research below): every
-    # vector-backed query depends on this collection existing, so if
-    # the rebuild itself also fails (e.g. outputs/chunks.csv missing
-    # too), this is allowed to raise and fail startup loudly and
-    # immediately, exactly as before - never a half-initialized module.
-    collection = _rebuild_chunks_collection(client, model)
+def _update_status(status, label, state):
+    """status.update() guarded against `status` being None - st.status()
+    itself never raises outside a real Streamlit script run (confirmed
+    live: evaluation/generate_benchmark.py and a bare `import retriever`
+    both reach this code with no script context), but the object it
+    yields there IS None, and calling .update() on that raises
+    AttributeError - exactly the kind of new, confusing crash this
+    deployment-polish feature exists to prevent, not introduce."""
 
-# The faculty-research collection is built by the separate
-# build_faculty_vector_db.py pipeline (Sprint 4C1) and may not exist yet
-# in every environment - detected once, the same way FACULTY_DB_READY
-# guards faculty.db access, so its absence degrades gracefully instead of
-# raising. Rebuild-on-missing (above) applies here too, still inside the
-# same graceful try/except - a fresh deployment gets the real capability
-# back instead of silently losing it, but a rebuild failure still
-# degrades exactly as gracefully as a missing collection always has.
+    if status is not None:
+        status.update(label=label, state=state)
+
+
 try:
-    faculty_research_collection = client.get_collection(
-        "wlu_faculty_research"
-    )
-    FACULTY_RESEARCH_READY = True
+    _chunks_collection_exists = bool(client.get_collection("wlu_chatbot_chunks"))
 except Exception:
+    _chunks_collection_exists = False
+
+if _chunks_collection_exists:
+
+    # Normal path (local dev, Docker, or any redeploy after the first
+    # one on a given host) - byte-identical to before this file gained
+    # first-launch status messaging. No status widget: this is near-
+    # instant, not the "first launch" experience the messaging below is
+    # for, so nothing should flash on screen for it.
+    collection = client.get_collection("wlu_chatbot_chunks")
+
+    # The faculty-research collection is built by the separate
+    # build_faculty_vector_db.py pipeline (Sprint 4C1) and may not exist
+    # yet in every environment - detected once, the same way
+    # FACULTY_DB_READY guards faculty.db access, so its absence degrades
+    # gracefully instead of raising. Silent rebuild-on-missing (no
+    # status widget, same reasoning as above): this is the rarer
+    # partial-init case (chunks present, faculty-research alone
+    # missing), not the fresh-deploy case the messaging below covers.
     try:
-        faculty_research_collection = _rebuild_faculty_research_collection(
-            client, model
+        faculty_research_collection = client.get_collection(
+            "wlu_faculty_research"
         )
         FACULTY_RESEARCH_READY = True
     except Exception:
-        faculty_research_collection = None
-        FACULTY_RESEARCH_READY = False
+        try:
+            faculty_research_collection = _rebuild_faculty_research_collection(
+                client, model
+            )
+            FACULTY_RESEARCH_READY = True
+        except Exception:
+            faculty_research_collection = None
+            FACULTY_RESEARCH_READY = False
+
+else:
+
+    # First-launch path (e.g. a fresh Streamlit Community Cloud clone,
+    # see _rebuild_chunks_collection()'s own comment) - both collections
+    # are rebuilt together under one visible status message, since a
+    # missing chunks collection means the sibling faculty-research
+    # collection living in the same vector_db/ directory is, in
+    # practice, missing too.
+    with st.status(
+        "Preparing the knowledge base for first launch. This may take "
+        "1-2 minutes.",
+        expanded=True,
+    ) as _status:
+
+        try:
+            collection = _rebuild_chunks_collection(client, model)
+
+            try:
+                faculty_research_collection = (
+                    _rebuild_faculty_research_collection(client, model)
+                )
+                FACULTY_RESEARCH_READY = True
+            except Exception:
+                faculty_research_collection = None
+                FACULTY_RESEARCH_READY = False
+
+            _update_status(_status, "Knowledge base ready.", "complete")
+
+        except Exception:
+
+            _update_status(
+                _status,
+                "Couldn't prepare the knowledge base. Please try "
+                "reloading this page in a few minutes, or contact the "
+                "site administrator if this keeps happening.",
+                "error",
+            )
+
+            # No vector-backed query can work without `collection` -
+            # nothing left to do but stop. st.stop() is Streamlit's own
+            # clean, no-traceback halt (only meaningful with a real
+            # script run behind it, confirmed live it's a no-op
+            # otherwise), so re-raise instead when there's no Streamlit
+            # runtime to catch it (evaluation/generate_benchmark.py, a
+            # bare `import retriever`) - there, the friendly status
+            # widget above can't render anyway, and silently continuing
+            # past this with `collection` never assigned would only
+            # replace one clear error with a much more confusing one
+            # the first time anything tries to use it.
+            if st_runtime.exists():
+                st.stop()
+            raise
 
 FOLLOWUP_PHRASES = [
     "tell me more",
