@@ -7,6 +7,7 @@ from rapidfuzz.distance import Levenshtein
 from sentence_transformers import SentenceTransformer
 
 import hybrid_rerank
+from domain_guard import matches_wlu_keywords
 
 DB_DIR = "data/vector_db"
 MODEL_NAME = "all-MiniLM-L6-v2"
@@ -400,6 +401,23 @@ def _search_course_by_name(question, memory=None):
 
     question_lower = question.lower()
 
+    # This is the least specific structured signal in the whole cascade
+    # (see structured_search()'s "COURSE NAME (last resort)" comment) - a
+    # bare substring match against the entire ~4600-row catalog, which
+    # includes plenty of one-word titles that are also ordinary dictionary
+    # words or general-knowledge topics with zero connection to WLU
+    # (GG250 is literally titled "Canada"; others include "Grief",
+    # "Poverty", "Evolution", "Optics", "Ecology", "Auditing", "Geometry",
+    # "Vikings!"). Confirmed live: "Tell me about Canada" and "What is
+    # Poverty?" - genuine out-of-domain questions - matched these titles
+    # and returned a WLU course card/clarification instead of being
+    # declined. A multi-word title ("Operating Systems", "Machine
+    # Learning", "Consumer Behaviour") is a much stronger signal on its
+    # own - vanishingly unlikely to appear by coincidence in an unrelated
+    # sentence - so only single-word titles are held to the extra bar
+    # below; every existing multi-word course-name match is unaffected.
+    has_domain_signal = matches_wlu_keywords(question)
+
     # Every distinct course name that appears as a whole-phrase,
     # word-boundary-bounded match in the question - e.g. "Operating
     # Systems" matches both the bare query and "Tell me about Operating
@@ -412,6 +430,9 @@ def _search_course_by_name(question, memory=None):
         name = (row["course_name"] or "").strip()
 
         if len(name) < _COURSE_NAME_MIN_LENGTH:
+            continue
+
+        if not has_domain_signal and len(name.split()) == 1:
             continue
 
         if re.search(rf"\b{re.escape(name.lower())}\b", question_lower):
@@ -4214,6 +4235,93 @@ def _extract_program_query_phrase(question):
     return re.sub(r"\s+(?:program|degree)$", "", phrase, flags=re.IGNORECASE).strip()
 
 
+# --- Broad program-overview questions ---
+#
+# A genuinely broad, entity-less question about the university's program
+# offerings as a whole ("What programs does WLU offer?", "What programs
+# does Laurier have?") has no single winning page for hybrid_search's
+# embedding search to land on - confirmed live, that exact question
+# retrieved an unrelated "Incidental Fees Breakdown" chunk, and "Tell me
+# about WLU" retrieved an IT-governance policy chunk, neither anywhere
+# near an actual program listing. Answered deterministically here for the
+# same hallucination-safety reason as every other structured type:
+# programs.db/departments.db already hold the real counts and names, so a
+# grounded aggregate needs no LLM guess at what "WLU's programs" even
+# means.
+#
+# Reached only after every specific PROGRAM/DEPARTMENT/FACULTY/RESEARCH
+# check above has already failed to match, so this can never preempt a
+# real "What is the Computer Science program?" or "What programs does the
+# Computer Science department offer?" lookup - those already return
+# above. Requires an explicit "offer(s/ed/ing)" verb or an explicit
+# wlu/laurier/university mention alongside the "what/which/all/list"
+# quantifier, so an unrelated use of the word "programs" ("What programs
+# are available for financial aid?") doesn't false-positive into this.
+_PROGRAM_OVERVIEW_PATTERN = re.compile(
+    r"\b(?:what|which|all(?:\s+the)?|list(?:\s+of)?(?:\s+all)?)\s+programs?\b"
+    r"[^.?!]{0,40}"
+    r"\b(?:wlu|laurier|(?:the\s+)?university|offer|offers|offered|offering)\b",
+    re.IGNORECASE,
+)
+
+
+def _program_overview_context():
+    """Deterministic university-wide summary: total program count broken
+    down by level, and the distinct faculties/schools offering them.
+    Faculty names are normalized (periods/whitespace collapsed, compared
+    case-insensitively) purely to de-duplicate a known data quirk -
+    departments.db has both "Lyle S. Hallman Faculty of Social Work" and
+    "Lyle S Hallman Faculty of Social Work" for the same faculty - into
+    one bullet instead of two near-identical entries that would read as
+    a formatting bug. Display spelling is kept from whichever variant
+    sorts first, not rewritten."""
+
+    conn = sqlite3.connect("data/programs.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT level, COUNT(*) FROM programs GROUP BY level")
+    level_counts = dict(cursor.fetchall())
+    conn.close()
+
+    conn = sqlite3.connect("data/departments.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT DISTINCT faculty_name FROM departments "
+        "WHERE faculty_name IS NOT NULL AND faculty_name != ''"
+    )
+    raw_names = [row[0].strip() for row in cursor.fetchall()]
+    conn.close()
+
+    seen_keys = set()
+    faculties = []
+
+    for name in sorted(raw_names):
+
+        key = re.sub(r"[.\s]+", " ", name).strip().lower()
+
+        if key in seen_keys:
+            continue
+
+        seen_keys.add(key)
+        faculties.append(name)
+
+    undergrad = level_counts.get("undergraduate", 0)
+    graduate = level_counts.get("graduate", 0)
+    total = undergrad + graduate
+
+    faculty_list = "\n".join(f"- {name}" for name in faculties)
+
+    return (
+        f"Wilfrid Laurier University offers {total} programs across "
+        f"{len(faculties)} faculties and schools:\n\n"
+        f"{faculty_list}\n\n"
+        f"Programs span {undergrad} undergraduate and {graduate} graduate "
+        f"offerings, including majors, minors, options, concentrations, "
+        f"and combined programs.\n\n"
+        f'Ask about a specific program, department, or faculty for full '
+        f'details (e.g. "Tell me about the Computer Science program").'
+    )
+
+
 # --- Policy index lookup (Phase 2) ---
 #
 # Gated on the literal word "policy"/"policies" being present, which
@@ -4814,6 +4922,14 @@ Research Interests:
             None,
             "not_found"
         )
+
+    # BROAD PROGRAM-OVERVIEW
+    # Reached only once every specific PROGRAM/DEPARTMENT/FACULTY/
+    # RESEARCH check above has already failed to match - see
+    # _PROGRAM_OVERVIEW_PATTERN's own comment.
+    if _PROGRAM_OVERVIEW_PATTERN.search(question_lower):
+
+        return (_program_overview_context(), None, "program_overview")
 
     # POLICY INDEX (Phase 2)
     # Gated on the word "policy"/"policies" (see search_policy's own

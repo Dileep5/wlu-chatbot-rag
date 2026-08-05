@@ -164,6 +164,13 @@ DETERMINISTIC_RESPONSE_TYPES = {
     # hallucination-prevention reason as every other type above, not
     # paraphrased by the LLM.
     "policy",
+    # Production Polish Sprint: the broad university-wide program
+    # overview (retriever.py's _program_overview_context()) is a
+    # deterministic count/list built directly from programs.db/
+    # departments.db - verbatim for the same reason as every other
+    # aggregate list type above (faculty_list/research/...), never an
+    # LLM paraphrase that could drift from the real counts.
+    "program_overview",
 }
 
 
