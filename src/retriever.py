@@ -17,23 +17,142 @@ client = chromadb.PersistentClient(
     path=DB_DIR
 )
 
-collection = client.get_collection(
-    "wlu_chatbot_chunks"
-)
+
+# Production deployment fix: data/vector_db/ is a large (~95MB),
+# fast-growing generated artifact deliberately excluded from git
+# (.gitignore) - rebuilt locally/in Docker from the ingestion pipeline,
+# never committed. A fresh git clone (e.g. Streamlit Community Cloud,
+# which only ever sees the git-tracked tree, never a machine's local
+# disk state) has no vector_db directory at all - chromadb.
+# PersistentClient() silently creates an empty one on first use, so the
+# unconditional get_collection() call below used to raise
+# NotFoundError and crash the app before a single query could ever be
+# served, even though nothing was actually wrong with retrieval itself.
+#
+# outputs/chunks.csv (the same source build_vector_db.py's own offline
+# pipeline reads - 4,066 real scraped-and-chunked WLU pages, ~7MB of
+# plain text) and data/faculty.db ARE committed, unlike the 95MB binary
+# vector_db/ itself, so both collections below can be rebuilt from
+# real, already-ingested data on first run whenever they're missing -
+# never placeholder/dummy content, and never touching how a query is
+# answered once the collection exists. Reimplemented here (not by
+# importing build_vector_db.py, which needs pandas) with the stdlib
+# csv module instead, so no new runtime dependency is introduced.
+def _rebuild_chunks_collection(chroma_client, embedding_model):
+
+    import csv
+
+    print(
+        "wlu_chatbot_chunks collection not found - rebuilding from "
+        "outputs/chunks.csv (expected on a fresh deploy; one-time cost)..."
+    )
+
+    with open("outputs/chunks.csv", newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+
+    try:
+        chroma_client.delete_collection("wlu_chatbot_chunks")
+    except Exception:
+        pass
+
+    rebuilt = chroma_client.get_or_create_collection(name="wlu_chatbot_chunks")
+
+    rebuilt.add(
+        ids=[row["chunk_id"] for row in rows],
+        documents=[row["chunk_text"] for row in rows],
+        metadatas=[
+            {"title": row["title"], "url": row["url"]} for row in rows
+        ],
+        embeddings=[
+            embedding_model.encode(row["chunk_text"]).tolist() for row in rows
+        ],
+    )
+
+    print(f"Rebuilt wlu_chatbot_chunks: {len(rows)} chunks.")
+
+    return rebuilt
+
+
+def _rebuild_faculty_research_collection(chroma_client, embedding_model):
+    """Mirrors build_faculty_vector_db.py's own logic exactly, from the
+    same committed source (data/faculty.db)."""
+
+    print(
+        "wlu_faculty_research collection not found - rebuilding from "
+        "data/faculty.db (expected on a fresh deploy; one-time cost)..."
+    )
+
+    conn = sqlite3.connect("data/faculty.db")
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    SELECT source_url, name, research_interests
+    FROM faculty
+    WHERE research_interests IS NOT NULL
+      AND TRIM(research_interests) != ''
+    """)
+
+    rows = cursor.fetchall()
+
+    conn.close()
+
+    try:
+        chroma_client.delete_collection("wlu_faculty_research")
+    except Exception:
+        pass
+
+    rebuilt = chroma_client.get_or_create_collection(name="wlu_faculty_research")
+
+    rebuilt.add(
+        ids=[source_url for source_url, _, _ in rows],
+        documents=[interests for _, _, interests in rows],
+        metadatas=[
+            {"source_url": source_url, "name": name}
+            for source_url, name, _ in rows
+        ],
+        embeddings=[
+            embedding_model.encode(interests).tolist()
+            for _, _, interests in rows
+        ],
+    )
+
+    print(f"Rebuilt wlu_faculty_research: {len(rows)} records.")
+
+    return rebuilt
+
+
+try:
+    collection = client.get_collection("wlu_chatbot_chunks")
+except Exception:
+    # No silent fallback here (unlike faculty-research below): every
+    # vector-backed query depends on this collection existing, so if
+    # the rebuild itself also fails (e.g. outputs/chunks.csv missing
+    # too), this is allowed to raise and fail startup loudly and
+    # immediately, exactly as before - never a half-initialized module.
+    collection = _rebuild_chunks_collection(client, model)
 
 # The faculty-research collection is built by the separate
 # build_faculty_vector_db.py pipeline (Sprint 4C1) and may not exist yet
 # in every environment - detected once, the same way FACULTY_DB_READY
 # guards faculty.db access, so its absence degrades gracefully instead of
-# raising.
+# raising. Rebuild-on-missing (above) applies here too, still inside the
+# same graceful try/except - a fresh deployment gets the real capability
+# back instead of silently losing it, but a rebuild failure still
+# degrades exactly as gracefully as a missing collection always has.
 try:
     faculty_research_collection = client.get_collection(
         "wlu_faculty_research"
     )
     FACULTY_RESEARCH_READY = True
 except Exception:
-    faculty_research_collection = None
-    FACULTY_RESEARCH_READY = False
+    try:
+        faculty_research_collection = _rebuild_faculty_research_collection(
+            client, model
+        )
+        FACULTY_RESEARCH_READY = True
+    except Exception:
+        faculty_research_collection = None
+        FACULTY_RESEARCH_READY = False
 
 FOLLOWUP_PHRASES = [
     "tell me more",
